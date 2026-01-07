@@ -153,6 +153,14 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await help_command(update, context)
 
 
+async def handle_private_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик произвольного текста в личных сообщениях."""
+    await update.message.reply_text(
+        "Используй кнопки ниже для работы со статистикой 👇",
+        reply_markup=MAIN_KEYBOARD
+    )
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик всех текстовых сообщений в группе."""
     if not update.message or not update.message.text:
@@ -214,6 +222,12 @@ def main():
         filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE &
         filters.Regex(r"^(📊 Статистика сегодня|📈 За неделю|🚗 Активные маршруты|❓ Помощь)$"),
         handle_buttons
+    ))
+
+    # Обработчик произвольного текста в личных сообщениях
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
+        handle_private_text
     ))
 
     # Обработчик всех текстовых сообщений в группах
