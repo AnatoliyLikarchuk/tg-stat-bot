@@ -35,6 +35,20 @@ class Config:
     # Часовой пояс
     TIMEZONE: str = os.getenv("TIMEZONE", "Europe/Kiev")
 
+    # Белый список пользователей (Telegram user_id через запятую)
+    # Если пусто — доступ разрешён всем
+    ALLOWED_USERS: set = set()
+    _allowed_users_str = os.getenv("ALLOWED_USERS", "")
+    if _allowed_users_str:
+        ALLOWED_USERS = {int(uid.strip()) for uid in _allowed_users_str.split(",") if uid.strip()}
+
+    @classmethod
+    def is_user_allowed(cls, user_id: int) -> bool:
+        """Проверяет, разрешён ли доступ пользователю."""
+        if not cls.ALLOWED_USERS:
+            return True  # Если список пуст — доступ всем
+        return user_id in cls.ALLOWED_USERS
+
     @classmethod
     def validate(cls) -> bool:
         """Проверяет обязательные настройки."""

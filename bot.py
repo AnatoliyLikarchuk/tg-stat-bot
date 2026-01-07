@@ -39,8 +39,23 @@ logger = logging.getLogger(__name__)
 parser = MessageParser()
 
 
+def check_access(update: Update) -> bool:
+    """Проверяет доступ пользователя."""
+    if not update.effective_user:
+        return False
+    return config.is_user_allowed(update.effective_user.id)
+
+
+async def access_denied(update: Update):
+    """Отправляет сообщение об отказе в доступе."""
+    await update.message.reply_text("⛔ Доступ запрещён")
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start."""
+    if not check_access(update):
+        await access_denied(update)
+        return
     await update.message.reply_text(
         "Привет! Я бот для сбора статистики логистики.\n\n"
         "Используй кнопки ниже для работы со статистикой.",
@@ -50,6 +65,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /help."""
+    if not check_access(update):
+        await access_denied(update)
+        return
     await update.message.reply_text(
         "📊 Бот статистики логистики\n\n"
         "Отслеживаемые события:\n"
@@ -65,6 +83,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def stats_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Статистика за сегодня."""
+    if not check_access(update):
+        await access_denied(update)
+        return
     stats = sheets_manager.get_today_stats()
 
     if not stats or stats.get("total_events", 0) == 0:
@@ -77,6 +98,9 @@ async def stats_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def stats_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Статистика за неделю."""
+    if not check_access(update):
+        await access_denied(update)
+        return
     stats = sheets_manager.get_stats_for_period(7)
 
     if not stats or stats.get("total_events", 0) == 0:
@@ -89,6 +113,9 @@ async def stats_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def active_routes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показывает активные маршруты."""
+    if not check_access(update):
+        await access_denied(update)
+        return
     routes = sheets_manager.get_active_routes()
 
     if not routes:
@@ -141,6 +168,9 @@ def format_stats(stats: dict, period: str) -> str:
 
 async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик нажатий на кнопки."""
+    if not check_access(update):
+        await access_denied(update)
+        return
     text = update.message.text
 
     if text == "📊 Статистика сегодня":
@@ -155,6 +185,9 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_private_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик произвольного текста в личных сообщениях."""
+    if not check_access(update):
+        await access_denied(update)
+        return
     await update.message.reply_text(
         "Используй кнопки ниже для работы со статистикой 👇",
         reply_markup=MAIN_KEYBOARD
@@ -164,6 +197,10 @@ async def handle_private_text(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик всех текстовых сообщений в группе."""
     if not update.message or not update.message.text:
+        return
+
+    # Проверка доступа (без сообщения об отказе в группах)
+    if not check_access(update):
         return
 
     text = update.message.text
