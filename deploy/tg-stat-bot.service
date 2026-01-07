@@ -1,0 +1,14 @@
+[Unit]
+Description=Telegram Logistics Statistics Bot
+After=network.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME
+WorkingDirectory=/home/YOUR_USERNAME/projects/tg-stat-bot
+ExecStart=/home/YOUR_USERNAME/projects/tg-stat-bot/venv/bin/python bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
