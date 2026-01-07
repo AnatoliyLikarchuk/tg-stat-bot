@@ -68,11 +68,11 @@ class SheetsManager:
             first_row = self.worksheet.row_values(1)
             if not first_row or first_row != self.HEADERS:
                 self.worksheet.update("A1:H1", [self.HEADERS])
-                # Формула автонумерации
-                self.worksheet.update("A2", [['=ARRAYFORMULA(IF(B2:B="","",ROW(B2:B)-1))']], value_input_option='USER_ENTERED')
+                # Формула автонумерации (русская локаль - точка с запятой)
+                self.worksheet.update("A2", [['=ARRAYFORMULA(IF(B2:B="";"";ROW(B2:B)-1))']], value_input_option='USER_ENTERED')
         except Exception:
             self.worksheet.update("A1:H1", [self.HEADERS])
-            self.worksheet.update("A2", [['=ARRAYFORMULA(IF(B2:B="","",ROW(B2:B)-1))']], value_input_option='USER_ENTERED')
+            self.worksheet.update("A2", [['=ARRAYFORMULA(IF(B2:B="";"";ROW(B2:B)-1))']], value_input_option='USER_ENTERED')
 
     def add_event(self, event: ParsedEvent, group_name: str = "") -> bool:
         """Добавляет событие в таблицу."""
