@@ -15,8 +15,8 @@ from config import config
 class SheetsManager:
     """Менеджер для работы с Google Sheets."""
 
-    # Заголовки таблицы
-    HEADERS = ["Дата", "Время", "Событие", "Маршрут", "Водитель", "Исходное сообщение", "Группа"]
+    # Заголовки таблицы (колонка A - автонумерация формулой)
+    HEADERS = ["№", "Дата", "Время", "Событие", "Маршрут", "Водитель", "Исходное сообщение", "Группа"]
 
     def __init__(self):
         self.client = None
@@ -67,9 +67,12 @@ class SheetsManager:
         try:
             first_row = self.worksheet.row_values(1)
             if not first_row or first_row != self.HEADERS:
-                self.worksheet.update("A1:G1", [self.HEADERS])
+                self.worksheet.update("A1:H1", [self.HEADERS])
+                # Формула автонумерации
+                self.worksheet.update("A2", [['=ARRAYFORMULA(IF(B2:B="","",ROW(B2:B)-1))']], value_input_option='USER_ENTERED')
         except Exception:
-            self.worksheet.update("A1:G1", [self.HEADERS])
+            self.worksheet.update("A1:H1", [self.HEADERS])
+            self.worksheet.update("A2", [['=ARRAYFORMULA(IF(B2:B="","",ROW(B2:B)-1))']], value_input_option='USER_ENTERED')
 
     def add_event(self, event: ParsedEvent, group_name: str = "") -> bool:
         """Добавляет событие в таблицу."""
@@ -83,7 +86,9 @@ class SheetsManager:
                 event.raw_text[:200],  # Ограничиваем длину
                 group_name
             ]
-            self.worksheet.append_row(row)
+            # Находим следующую пустую строку и пишем в B:H (A - автонумерация)
+            next_row = len(self.worksheet.get_all_values()) + 1
+            self.worksheet.update(f"B{next_row}:H{next_row}", [row])
             return True
         except Exception as e:
             print(f"Ошибка записи в таблицу: {e}")
