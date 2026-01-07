@@ -6,13 +6,22 @@ Telegram-бот для сбора статистики логистики.
 import asyncio
 import logging
 from datetime import datetime
-from telegram import Update
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
     ContextTypes,
     filters,
+)
+
+# Клавиатура с командами
+MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    [
+        [KeyboardButton("📊 Статистика сегодня"), KeyboardButton("📈 За неделю")],
+        [KeyboardButton("🚗 Активные маршруты"), KeyboardButton("❓ Помощь")]
+    ],
+    resize_keyboard=True
 )
 
 from config import config
@@ -34,31 +43,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start."""
     await update.message.reply_text(
         "Привет! Я бот для сбора статистики логистики.\n\n"
-        "Команды:\n"
-        "/stats — статистика за сегодня\n"
-        "/stats_week — статистика за неделю\n"
-        "/routes — активные маршруты\n"
-        "/help — справка"
+        "Используй кнопки ниже для работы со статистикой.",
+        reply_markup=MAIN_KEYBOARD
     )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /help."""
     await update.message.reply_text(
-        "📊 *Бот статистики логистики*\n\n"
-        "*Отслеживаемые события:*\n"
+        "📊 Бот статистики логистики\n\n"
+        "Отслеживаемые события:\n"
         "• Начало сборки\n"
         "• Сборка завершена\n"
         "• Выезд маршрута\n"
         "• Завершение маршрута\n"
         "• Проблемы доставки\n\n"
-        "*Команды:*\n"
-        "/stats — статистика за сегодня\n"
-        "/stats_week — за последние 7 дней\n"
-        "/routes — текущие активные маршруты\n\n"
-        "Добавьте бота в группу логистики, и он будет автоматически "
-        "парсить сообщения и сохранять статистику.",
-        parse_mode="Markdown"
+        "Добавь бота в группу логистики, и он будет автоматически "
+        "парсить сообщения и сохранять статистику."
     )
 
 
@@ -138,12 +139,31 @@ def format_stats(stats: dict, period: str) -> str:
     return text
 
 
+async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик нажатий на кнопки."""
+    text = update.message.text
+
+    if text == "📊 Статистика сегодня":
+        await stats_today(update, context)
+    elif text == "📈 За неделю":
+        await stats_week(update, context)
+    elif text == "🚗 Активные маршруты":
+        await active_routes(update, context)
+    elif text == "❓ Помощь":
+        await help_command(update, context)
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик всех текстовых сообщений в группе."""
     if not update.message or not update.message.text:
         return
 
     text = update.message.text
+
+    # Игнорируем кнопки в группах
+    if text in ["📊 Статистика сегодня", "📈 За неделю", "🚗 Активные маршруты", "❓ Помощь"]:
+        return
+
     events = parser.parse(text)
 
     if not events:
@@ -176,15 +196,25 @@ def main():
     if not sheets_manager.connect():
         logger.warning("Google Sheets не подключен, данные не будут сохраняться")
 
-    # Создаём приложение
-    app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
+    # Создаём приложение с увеличенным таймаутом
+    app = (
+        Application.builder()
+        .token(config.TELEGRAM_BOT_TOKEN)
+        .connect_timeout(30.0)
+        .read_timeout(30.0)
+        .write_timeout(30.0)
+        .build()
+    )
 
-    # Регистрируем обработчики команд
+    # Регистрируем обработчик /start
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("stats", stats_today))
-    app.add_handler(CommandHandler("stats_week", stats_week))
-    app.add_handler(CommandHandler("routes", active_routes))
+
+    # Обработчик кнопок в личных сообщениях
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE &
+        filters.Regex(r"^(📊 Статистика сегодня|📈 За неделю|🚗 Активные маршруты|❓ Помощь)$"),
+        handle_buttons
+    ))
 
     # Обработчик всех текстовых сообщений в группах
     app.add_handler(MessageHandler(
