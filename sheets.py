@@ -6,10 +6,14 @@
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import List, Optional
 from parser import ParsedEvent
 from config import config
+
+# Timezone из конфига
+TZ = ZoneInfo(config.TIMEZONE)
 
 
 class SheetsManager:
@@ -78,8 +82,8 @@ class SheetsManager:
         """Добавляет событие в таблицу."""
         try:
             row = [
-                datetime.now().strftime("%d.%m.%Y"),
-                event.time or datetime.now().strftime("%H:%M"),
+                datetime.now(TZ).strftime("%d.%m.%Y"),
+                event.time or datetime.now(TZ).strftime("%H:%M"),
                 event.event_type,
                 event.route_number or "",
                 event.driver or "",
@@ -104,14 +108,14 @@ class SheetsManager:
 
     def get_today_stats(self) -> dict:
         """Получает статистику за сегодня."""
-        today = datetime.now().strftime("%d.%m.%Y")
+        today = datetime.now(TZ).strftime("%d.%m.%Y")
         return self._get_stats_for_date(today)
 
     def get_stats_for_period(self, days: int = 7) -> dict:
         """Получает статистику за указанное количество дней."""
         try:
             all_records = self.worksheet.get_all_records()
-            today = datetime.now()
+            today = datetime.now(TZ)
 
             stats = {
                 "total_events": 0,
@@ -180,7 +184,7 @@ class SheetsManager:
     def get_active_routes(self) -> List[dict]:
         """Получает активные маршруты (начаты, но не завершены)."""
         try:
-            today = datetime.now().strftime("%d.%m.%Y")
+            today = datetime.now(TZ).strftime("%d.%m.%Y")
             all_records = self.worksheet.get_all_records()
 
             routes_status = {}  # {route_number: last_status}
