@@ -107,3 +107,6 @@ tg-stat-bot/
 ## Лицензия
 
 MIT
+
+---
+*Last deploy test: 2026-01-07 17:08*
