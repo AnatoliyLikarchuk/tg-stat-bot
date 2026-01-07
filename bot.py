@@ -199,10 +199,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
         return
 
-    # Проверка доступа (без сообщения об отказе в группах)
-    if not check_access(update):
-        return
-
+    # В группах парсим сообщения от всех (белый список только для команд)
     text = update.message.text
 
     # Игнорируем кнопки в группах
