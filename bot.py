@@ -202,11 +202,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # В группах парсим сообщения от всех (белый список только для команд)
     text = update.message.text
 
+    # DEBUG: логируем все сообщения из групп
+    logger.info(f"[DEBUG] Получено: '{text[:100]}' от {update.effective_user.first_name if update.effective_user else 'unknown'}")
+
     # Игнорируем кнопки в группах
     if text in ["📊 Статистика сегодня", "📈 За неделю", "🚗 Активные маршруты", "❓ Помощь"]:
         return
 
     events = parser.parse(text)
+
+    # DEBUG: логируем результат парсинга
+    if events:
+        logger.info(f"[DEBUG] Распознано {len(events)} событий: {[e.event_type for e in events]}")
+    else:
+        logger.debug(f"[DEBUG] Не распознано: '{text[:50]}'")
 
     if not events:
         return  # Сообщение не содержит логистических событий
