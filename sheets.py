@@ -130,7 +130,7 @@ class SheetsManager:
             for record in all_records:
                 try:
                     record_date = datetime.strptime(record.get("Дата", ""), "%d.%m.%Y")
-                    diff = (today - record_date).days
+                    diff = (today.replace(tzinfo=None) - record_date).days
                     if diff <= days:
                         self._add_to_stats(stats, record)
                 except ValueError:
