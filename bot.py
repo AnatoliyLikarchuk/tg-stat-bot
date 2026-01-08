@@ -93,7 +93,7 @@ async def stats_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = format_stats(stats, "сегодня")
-    await update.message.reply_text(text, parse_mode="Markdown")
+    await update.message.reply_text(text)
 
 
 async def stats_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -108,7 +108,7 @@ async def stats_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = format_stats(stats, "неделю")
-    await update.message.reply_text(text, parse_mode="Markdown")
+    await update.message.reply_text(text)
 
 
 async def active_routes(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -122,23 +122,28 @@ async def active_routes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🚗 Активных маршрутов нет.")
         return
 
-    text = "🚗 *Активные маршруты:*\n\n"
+    text = "🚗 Активные маршруты:\n\n"
     for r in routes:
-        text += f"• Маршрут {r['route']}"
-        if r["driver"]:
-            text += f" ({r['driver']})"
-        text += f" — {r['status']} в {r['time']}\n"
+        route_num = r['route'] or '?'
+        driver = r['driver'] or ''
+        status = r['status'].replace('_', ' ')  # маршрут_завершён → маршрут завершён
+        time = r['time'] or ''
 
-    await update.message.reply_text(text, parse_mode="Markdown")
+        text += f"• Маршрут {route_num}"
+        if driver:
+            text += f" ({driver})"
+        text += f" — {status} в {time}\n"
+
+    await update.message.reply_text(text)
 
 
 def format_stats(stats: dict, period: str) -> str:
     """Форматирует статистику для вывода."""
-    text = f"📊 *Статистика за {period}*\n\n"
+    text = f"📊 Статистика за {period}\n\n"
     text += f"Всего событий: {stats['total_events']}\n\n"
 
     if stats.get("by_type"):
-        text += "*По типам:*\n"
+        text += "По типам:\n"
         type_names = {
             "начало_сборки": "🔧 Начало сборки",
             "сборка_завершена": "✅ Сборка завершена",
@@ -148,18 +153,18 @@ def format_stats(stats: dict, period: str) -> str:
             "проблема": "⚠️ Проблемы"
         }
         for event_type, count in stats["by_type"].items():
-            name = type_names.get(event_type, event_type)
+            name = type_names.get(event_type, event_type.replace('_', ' '))
             text += f"  {name}: {count}\n"
         text += "\n"
 
     if stats.get("by_driver"):
-        text += "*По водителям:*\n"
+        text += "По водителям:\n"
         for driver, count in sorted(stats["by_driver"].items(), key=lambda x: -x[1]):
             text += f"  • {driver}: {count} событий\n"
         text += "\n"
 
     if stats.get("problems"):
-        text += f"*Проблемы ({len(stats['problems'])}):\n*"
+        text += f"Проблемы ({len(stats['problems'])}):\n"
         for problem in stats["problems"][:5]:  # Максимум 5
             text += f"  — {problem[:50]}...\n"
 
