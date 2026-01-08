@@ -196,14 +196,17 @@ async def handle_private_text(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик всех текстовых сообщений в группе."""
-    if not update.message or not update.message.text:
+    if not update.message:
         return
 
-    # В группах парсим сообщения от всех (белый список только для команд)
-    text = update.message.text
+    # Получаем текст из message.text или message.caption (для фото/документов)
+    text = update.message.text or update.message.caption
+    if not text:
+        return
 
     # DEBUG: логируем все сообщения из групп
-    logger.info(f"[DEBUG] Получено: '{text[:100]}' от {update.effective_user.first_name if update.effective_user else 'unknown'}")
+    is_caption = update.message.caption is not None
+    logger.info(f"[DEBUG] Получено{'(caption)' if is_caption else ''}: '{text[:100]}' от {update.effective_user.first_name if update.effective_user else 'unknown'}")
 
     # Игнорируем кнопки в группах
     if text in ["📊 Статистика сегодня", "📈 За неделю", "🚗 Активные маршруты", "❓ Помощь"]:
@@ -273,9 +276,9 @@ def main():
         handle_private_text
     ))
 
-    # Обработчик всех текстовых сообщений в группах
+    # Обработчик всех текстовых сообщений в группах (включая подписи к фото/документам)
     app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
+        (filters.TEXT | filters.CAPTION) & ~filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
         handle_message
     ))
 
