@@ -93,6 +93,8 @@ class SheetsManager:
             ]
             # Вставляем новую строку сразу после заголовка (позиция 2)
             self.worksheet.insert_row(row, index=2)
+            # Восстанавливаем формулу автонумерации (insert_row сдвигает её вниз)
+            self.worksheet.update("A2", [['=ARRAYFORMULA(IF(B2:B="";"";ROW(B2:B)-1))']], value_input_option='USER_ENTERED')
             return True
         except Exception as e:
             print(f"Ошибка записи в таблицу: {e}")
