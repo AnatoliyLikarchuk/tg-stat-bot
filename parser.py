@@ -41,8 +41,9 @@ class MessageParser:
         # Сборка завершена
         "assembly_done": r"собран[аоы]?\s+(?:маршрут)?",
 
-        # Выезд
-        "departure": r"выехал[аио]?\s+(?:маршрут)?",
+        # Выезд (два формата: "выехал маршрут N" и "Водитель выехал")
+        "departure": r"выехал[аио]?(?:\s+маршрут)?",  # пробел необязателен
+        "departure_alt": r"([А-ЯІЇЄҐа-яіїєґ]+)\s+выехал",  # Горбатко выехал
 
         # Маршрут завершён (рус/укр)
         "route_complete": r"маршрут\s+(?:заверш|закінч|закри)|(?:все\s+)?развез|(?:всё\s+)?развёз|маршрут\s+закінчи|закінчив|закончил",
@@ -135,6 +136,18 @@ class MessageParser:
                         time=time_str,
                         route_number=route,
                         driver=driver,
+                        raw_text=text
+                    ))
+            else:
+                # Альтернативный формат: "Водитель выехал" (без номера маршрута)
+                alt_match = self.compiled["departure_alt"].search(text)
+                if alt_match:
+                    driver_name = alt_match.group(1)
+                    events.append(ParsedEvent(
+                        event_type=self.EVENT_DEPARTURE,
+                        time=time_str,
+                        route_number=None,
+                        driver=driver_name,
                         raw_text=text
                     ))
 
