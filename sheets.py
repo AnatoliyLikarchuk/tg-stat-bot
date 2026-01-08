@@ -192,7 +192,8 @@ class SheetsManager:
             for record in all_records:
                 if record.get("Дата") == today:
                     route = record.get("Маршрут", "")
-                    if route:
+                    # Берём только первую запись (самую новую, т.к. новые сверху)
+                    if route and route not in routes_status:
                         routes_status[route] = {
                             "route": route,
                             "driver": record.get("Водитель", ""),
