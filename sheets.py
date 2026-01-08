@@ -79,9 +79,10 @@ class SheetsManager:
             self.worksheet.update("A2", [['=ARRAYFORMULA(IF(B2:B="";"";ROW(B2:B)-1))']], value_input_option='USER_ENTERED')
 
     def add_event(self, event: ParsedEvent, group_name: str = "") -> bool:
-        """Добавляет событие в таблицу."""
+        """Добавляет событие в таблицу (вставляет сверху, сразу после заголовка)."""
         try:
             row = [
+                "",  # A - автонумерация формулой
                 datetime.now(TZ).strftime("%d.%m.%Y"),
                 event.time or datetime.now(TZ).strftime("%H:%M"),
                 event.event_type,
@@ -90,9 +91,8 @@ class SheetsManager:
                 event.raw_text[:200],  # Ограничиваем длину
                 group_name
             ]
-            # Находим следующую пустую строку и пишем в B:H (A - автонумерация)
-            next_row = len(self.worksheet.get_all_values()) + 1
-            self.worksheet.update(f"B{next_row}:H{next_row}", [row])
+            # Вставляем новую строку сразу после заголовка (позиция 2)
+            self.worksheet.insert_row(row, index=2)
             return True
         except Exception as e:
             print(f"Ошибка записи в таблицу: {e}")
