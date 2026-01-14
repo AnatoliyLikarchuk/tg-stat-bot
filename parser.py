@@ -182,21 +182,53 @@ class MessageParser:
 
         return events
 
+    # Служебные слова, которые НЕ являются именами водителей
+    SKIP_WORDS = {
+        # Союзы и предлоги
+        "и", "та", "в", "на", "з", "с",
+        # Служебные слова
+        "ходка", "ходки", "общего", "сборочного",
+        # Глаголы завершения (рус)
+        "закончил", "закончила", "закончили", "закончив",
+        "завершил", "завершила", "завершили", "завершив",
+        "закрыл", "закрыла", "закрыли",
+        "развез", "развезла", "развезли", "развёз",
+        # Глаголы завершения (укр)
+        "закінчив", "закінчила", "закінчили",
+        "завершив", "завершила", "завершили",
+        "закрив", "закрила", "закрили",
+        # Глаголы выезда
+        "выехал", "выехала", "выехали",
+        "виїхав", "виїхала", "виїхали",
+        # Прочее
+        "тест", "тестов", "точка", "точку",
+    }
+
     def _extract_routes_drivers(self, text: str) -> List[tuple]:
         """
         Извлекает пары (номер_маршрута, водитель) из текста.
         Например: "маршрут 1 Кияниця" -> [("1", "Кияниця")]
+        Также: "Бельченко маршрут 50 закончил" -> [("50", "Бельченко")]
         """
         results = []
 
-        # Ищем паттерн: маршрут N ИмяВодителя
-        pattern = r"маршрут\s*(\d+)\s+([А-ЯІЇЄҐа-яіїєґ]+)"
-        matches = re.findall(pattern, text, re.IGNORECASE | re.UNICODE)
+        # Паттерн 1: маршрут N ИмяВодителя (стандартный)
+        pattern1 = r"маршрут\s*(\d+)\s+([А-ЯІЇЄҐа-яіїєґ]+)"
+        matches1 = re.findall(pattern1, text, re.IGNORECASE | re.UNICODE)
 
-        for route_num, driver_name in matches:
-            # Фильтруем служебные слова
-            if driver_name.lower() not in ["и", "та", "ходка", "общего", "сборочного"]:
+        for route_num, driver_name in matches1:
+            if driver_name.lower() not in self.SKIP_WORDS:
                 results.append((route_num, driver_name))
+
+        # Паттерн 2: ИмяВодителя маршрут N (альтернативный)
+        # Например: "Бельченко маршрут 50 закончил"
+        if not results:
+            pattern2 = r"([А-ЯІЇЄҐ][а-яіїєґ]+)\s+маршрут\s*(\d+)"
+            matches2 = re.findall(pattern2, text, re.UNICODE)
+
+            for driver_name, route_num in matches2:
+                if driver_name.lower() not in self.SKIP_WORDS:
+                    results.append((route_num, driver_name))
 
         return results
 
