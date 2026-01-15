@@ -4,3 +4,4 @@ oauth2client==4.1.3
 python-dotenv==1.0.0
 schedule==1.2.1
 tzdata==2025.3
+telethon==1.37.0  # для экспорта истории чатов

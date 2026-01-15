@@ -6,3 +6,9 @@ __pycache__/
 .DS_Store
 venv/
 .vscode/
+doc/
+# Экспорт истории чатов
+export_history.py
+history_*.json
+export_session.session
+export_session.session-journal
