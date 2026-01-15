@@ -22,6 +22,42 @@ class ParsedEvent:
 class MessageParser:
     """Парсер сообщений из Telegram-группы логистики."""
 
+    # Словарь синонимов имён водителей (варианты -> каноническое имя)
+    # Добавляй сюда новые варианты по мере появления
+    DRIVER_ALIASES = {
+        "роговский": "Роговський",
+        "роговській": "Роговський",
+        "роговський": "Роговський",
+        "бельченко": "Бєльченко",
+        "бєльченко": "Бєльченко",
+        "качаенко": "Качаєнко",
+        "качаєнко": "Качаєнко",
+        # Добавляй новых водителей здесь:
+        # "иванов": "Іванов",
+    }
+
+    # Транслитерация рус → укр (для автоматической нормализации)
+    RU_TO_UA = {
+        "и": "і",
+        "ы": "и",
+        "э": "е",
+        "ъ": "",
+        "ё": "ьо",
+    }
+
+    # Типичные окончания фамилий рус → укр
+    ENDINGS_RU_TO_UA = [
+        ("ский", "ський"),
+        ("ская", "ська"),
+        ("цкий", "цький"),
+        ("цкая", "цька"),
+        ("ий", "ій"),
+        ("ая", "а"),
+        ("ое", "е"),
+        ("ев", "єв"),
+        ("ёв", "йов"),
+    ]
+
     # Типы событий
     EVENT_ASSEMBLY_START = "начало_сборки"
     EVENT_ASSEMBLY_DONE = "сборка_завершена"
@@ -50,7 +86,7 @@ class MessageParser:
         "departure_alt": r"([А-ЯІЇЄҐа-яіїєґ]+)\s+(?:выехал|виїхав)",  # Горбатко выехал/виїхав
 
         # Маршрут завершён (рус/укр)
-        "route_complete": r"мар[шщ]рут\s+(?:заверш|закінч|закри)|(?:все\s+)?развез|(?:всё\s+)?развёз|мар[шщ]рут\s+закінчи|закінчив|закончил",
+        "route_complete": r"мар[шщ]рут\s+(?:заверш|закінч|закри)|(?:все\s+)?развез|(?:всё\s+)?развёз|мар[шщ]рут\s+закінчи|закінчив|закончил|мар[шщ]рут\s*\d*\s*закрито",
 
         # Все маршруты выехали
         "all_departed": r"все\s+мар[шщ]рут[ыи]\s+выехал",
@@ -74,6 +110,45 @@ class MessageParser:
             key: re.compile(pattern, re.IGNORECASE | re.UNICODE)
             for key, pattern in self.PATTERNS.items()
         }
+
+    def normalize_driver_name(self, name: str) -> str:
+        """
+        Нормализует имя водителя к единому формату (украинский).
+        1. Проверяет словарь синонимов
+        2. Применяет автотранслитерацию рус → укр
+        """
+        if not name:
+            return name
+
+        name_lower = name.lower()
+
+        # 1. Проверяем словарь синонимов
+        if name_lower in self.DRIVER_ALIASES:
+            return self.DRIVER_ALIASES[name_lower]
+
+        # 2. Автотранслитерация рус → укр
+        result = name
+
+        # Сначала меняем окончания (более специфичные правила)
+        result_lower = result.lower()
+        for ru_ending, ua_ending in self.ENDINGS_RU_TO_UA:
+            if result_lower.endswith(ru_ending):
+                # Сохраняем регистр первой буквы
+                base = result[:-len(ru_ending)]
+                result = base + ua_ending
+                break
+
+        # Затем посимвольная замена
+        for ru_char, ua_char in self.RU_TO_UA.items():
+            # Заменяем с учётом регистра
+            result = result.replace(ru_char, ua_char)
+            result = result.replace(ru_char.upper(), ua_char.upper() if ua_char else "")
+
+        # Первая буква — заглавная
+        if result:
+            result = result[0].upper() + result[1:]
+
+        return result
 
     def parse(self, text: str) -> List[ParsedEvent]:
         """
@@ -221,6 +296,7 @@ class MessageParser:
         "закінчив", "закінчила", "закінчили",
         "завершив", "завершила", "завершили",
         "закрив", "закрила", "закрили",
+        "закрито",
         # Глаголы выезда
         "выехал", "выехала", "выехали",
         "виїхав", "виїхала", "виїхали",
@@ -240,9 +316,9 @@ class MessageParser:
         pattern1 = r"мар[шщ]рут\s*(\d+)\s*([А-ЯІЇЄҐа-яіїєґ]+)?"
         matches1 = re.findall(pattern1, text, re.IGNORECASE | re.UNICODE)
 
-        # Паттерн 2: ИмяВодителя маршрут N (водитель перед маршрутом)
+        # Паттерн 2: ИмяВодителя маршрут N (водитель перед маршрутом, включая перенос строки)
         pattern2 = r"([А-ЯІЇЄҐ][а-яіїєґ']+)\s+мар[шщ]рут\s*(\d+)"
-        matches2 = re.findall(pattern2, text, re.UNICODE)
+        matches2 = re.findall(pattern2, text, re.IGNORECASE | re.UNICODE)
         drivers_before = {route_num: driver_name for driver_name, route_num in matches2
                          if driver_name.lower() not in self.SKIP_WORDS}
 
@@ -256,12 +332,18 @@ class MessageParser:
             elif route_num in drivers_before:
                 driver_name = drivers_before[route_num]
 
+            # Нормализуем имя водителя (рус → укр)
+            if driver_name:
+                driver_name = self.normalize_driver_name(driver_name)
+
             if driver_name or route_num:
                 results.append((route_num, driver_name))
 
         # Если ничего не нашли через паттерн 1, пробуем только паттерн 2
         if not results and drivers_before:
             for route_num, driver_name in drivers_before.items():
+                # Нормализуем имя водителя (рус → укр)
+                driver_name = self.normalize_driver_name(driver_name)
                 results.append((route_num, driver_name))
 
         return results
@@ -292,6 +374,10 @@ if __name__ == "__main__":
         "Бєльченко маршрут 66 закончил",
         # Опечатка марщрут
         "Роговський марщрут 8 закінчив",
+        # Нормализация имён (рус → укр)
+        "10.15 собран маршрут 8 Роговский",
+        # Закрито (укр)
+        "Качаєнко\nМаршрут 9 закрито.",
     ]
 
     for msg in test_messages:
