@@ -27,7 +27,7 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
 from config import config
 from parser import MessageParser
 from sheets import sheets_manager
-from scheduler import ReportScheduler
+from scheduler import setup_scheduler
 
 # Настройка логирования
 logging.basicConfig(
@@ -310,9 +310,8 @@ def main():
     # Обработчик ошибок
     app.add_error_handler(error_handler)
 
-    # Запускаем планировщик автоотчётов
-    scheduler = ReportScheduler(app.bot)
-    scheduler.start()
+    # Запускаем планировщик автоотчётов (с поддержкой timezone)
+    setup_scheduler(app)
 
     # Запуск
     logger.info("Бот запущен...")
