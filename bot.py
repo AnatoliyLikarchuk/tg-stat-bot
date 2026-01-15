@@ -27,6 +27,7 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
 from config import config
 from parser import MessageParser
 from sheets import sheets_manager
+from scheduler import ReportScheduler
 
 # Настройка логирования
 logging.basicConfig(
@@ -244,6 +245,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.warning(f"Не удалось поставить реакцию: {e}")
 
+        # Проверяем: если закрыли последний маршрут — уведомляем группу
+        has_route_completed = any(e.event_type == "маршрут_завершён" for e in events)
+        if has_route_completed and config.REPORT_CHAT_ID:
+            active_routes = sheets_manager.get_active_routes()
+            if not active_routes:
+                try:
+                    await context.bot.send_message(
+                        chat_id=config.REPORT_CHAT_ID,
+                        text="✅ Всі маршрути завершені"
+                    )
+                    logger.info("Отправлено уведомление: все маршруты завершены")
+                except Exception as e:
+                    logger.warning(f"Не удалось отправить уведомление о завершении: {e}")
+
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик ошибок."""
@@ -294,6 +309,10 @@ def main():
 
     # Обработчик ошибок
     app.add_error_handler(error_handler)
+
+    # Запускаем планировщик автоотчётов
+    scheduler = ReportScheduler(app.bot)
+    scheduler.start()
 
     # Запуск
     logger.info("Бот запущен...")

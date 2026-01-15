@@ -28,6 +28,7 @@ class Config:
 
     # Автоотчёты
     REPORT_CHAT_ID: str = os.getenv("REPORT_CHAT_ID", "")
+    ACTIVE_ROUTES_REPORT_TIME: str = os.getenv("ACTIVE_ROUTES_REPORT_TIME", "19:00")
     DAILY_REPORT_TIME: str = os.getenv("DAILY_REPORT_TIME", "20:00")
     WEEKLY_REPORT_DAY: int = int(os.getenv("WEEKLY_REPORT_DAY", "0"))  # 0 = понедельник
     WEEKLY_REPORT_TIME: str = os.getenv("WEEKLY_REPORT_TIME", "09:00")
