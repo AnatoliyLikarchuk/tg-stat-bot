@@ -6,7 +6,7 @@ Telegram-бот для сбора статистики логистики.
 import asyncio
 import logging
 from datetime import datetime
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReactionTypeEmoji
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -238,6 +238,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if saved > 0:
         logger.info(f"Сохранено {saved} событий из группы '{group_name}'")
+        # Ставим реакцию 🏆 как подтверждение записи
+        try:
+            await update.message.set_reaction(reaction=[ReactionTypeEmoji("🏆")])
+        except Exception as e:
+            logger.warning(f"Не удалось поставить реакцию: {e}")
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
