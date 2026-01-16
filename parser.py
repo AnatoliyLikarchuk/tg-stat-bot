@@ -97,11 +97,11 @@ class MessageParser:
         # Поздняя доставка: "5 точек после 19"
         "late_delivery": r"(\d+)\s+точ[е|о]к\s+после\s+(\d+)",
 
-        # Номер маршрута (с учётом опечатки марщрут)
-        "route": r"мар[шщ]рут\s*(\d+)",
+        # Номер маршрута (с учётом опечаток: марщрут, маршру)
+        "route": r"мар[шщ]рут?\s*(\d+)",
 
         # Имя водителя (после номера маршрута)
-        "driver": r"мар[шщ]рут\s*\d+\s+([А-ЯІЇЄҐа-яіїєґA-Za-z]+)",
+        "driver": r"мар[шщ]рут?\s*\d+\s+([А-ЯІЇЄҐа-яіїєґA-Za-z]+)",
     }
 
     def __init__(self):
@@ -244,14 +244,7 @@ class MessageParser:
                         driver=driver,
                         raw_text=text
                     ))
-            else:
-                events.append(ParsedEvent(
-                    event_type=self.EVENT_ROUTE_COMPLETE,
-                    time=time_str,
-                    route_number=None,
-                    driver=None,
-                    raw_text=text
-                ))
+            # Без номера маршрута — не записываем (чтобы не ломать логику активных маршрутов)
 
         if self.compiled["problem"].search(text_lower):
             events.append(ParsedEvent(
@@ -314,12 +307,12 @@ class MessageParser:
         """
         results = []
 
-        # Паттерн 1: маршрут N ИмяВодителя (стандартный, с учётом опечатки марщрут)
-        pattern1 = r"мар[шщ]рут\s*(\d+)\s*([А-ЯІЇЄҐа-яіїєґ]+)?"
+        # Паттерн 1: маршрут N ИмяВодителя (стандартный, с учётом опечаток: марщрут, маршру)
+        pattern1 = r"мар[шщ]рут?\s*(\d+)\s*([А-ЯІЇЄҐа-яіїєґ]+)?"
         matches1 = re.findall(pattern1, text, re.IGNORECASE | re.UNICODE)
 
         # Паттерн 2: ИмяВодителя маршрут N (водитель перед маршрутом, включая перенос строки)
-        pattern2 = r"([А-ЯІЇЄҐ][а-яіїєґ']+)\s+мар[шщ]рут\s*(\d+)"
+        pattern2 = r"([А-ЯІЇЄҐ][а-яіїєґ']+)\s+мар[шщ]рут?\s*(\d+)"
         matches2 = re.findall(pattern2, text, re.IGNORECASE | re.UNICODE)
         drivers_before = {route_num: driver_name for driver_name, route_num in matches2
                          if driver_name.lower() not in self.SKIP_WORDS}
