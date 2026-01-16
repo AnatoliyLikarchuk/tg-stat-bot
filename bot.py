@@ -248,7 +248,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Проверяем: если закрыли последний маршрут — уведомляем группу
         has_route_completed = any(e.event_type == "маршрут_завершён" for e in events)
         if has_route_completed and config.REPORT_CHAT_ID:
+            # Небольшая задержка чтобы Google API синхронизировал данные
+            await asyncio.sleep(1)
             active_routes = sheets_manager.get_active_routes()
+            logger.info(f"[DEBUG] Проверка завершения: активных маршрутов = {len(active_routes)}")
+            if active_routes:
+                logger.info(f"[DEBUG] Активные: {[r.get('route') for r in active_routes]}")
             if not active_routes:
                 try:
                     await context.bot.send_message(
