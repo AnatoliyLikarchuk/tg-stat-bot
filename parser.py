@@ -320,6 +320,14 @@ class MessageParser:
         drivers_before = {route_num: driver_name for driver_name, route_num in matches2
                          if driver_name.lower() not in self.SKIP_WORDS}
 
+        # Паттерн 3: ИмяВодителя N маршрут (номер между именем и словом "маршрут")
+        # Пример: "Довгаль 6 маршрут закрив"
+        pattern3 = r"([А-ЯІЇЄҐЁ][а-яіїєґё']+)\s+(\d+)\s+мар[шщ]рут"
+        matches3 = re.findall(pattern3, text, re.IGNORECASE | re.UNICODE)
+        for driver_name, route_num in matches3:
+            if driver_name.lower() not in self.SKIP_WORDS and route_num not in drivers_before:
+                drivers_before[route_num] = driver_name
+
         for route_num, driver_after in matches1:
             driver_name = None
 
@@ -376,6 +384,8 @@ if __name__ == "__main__":
         "10.15 собран маршрут 8 Роговский",
         # Закрито (укр)
         "Качаєнко\nМаршрут 9 закрито.",
+        # Формат "Имя N маршрут глагол" (номер перед словом маршрут)
+        "Довгаль 6 маршрут закрив",
     ]
 
     for msg in test_messages:
