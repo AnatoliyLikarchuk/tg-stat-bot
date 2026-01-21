@@ -6,6 +6,7 @@ Telegram-бот для сбора статистики логистики.
 import asyncio
 import logging
 from datetime import datetime
+import pytz
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReactionTypeEmoji
 from telegram.ext import (
     Application,
@@ -256,11 +257,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.info(f"[DEBUG] Активные: {[r.get('route') for r in active_routes]}")
             if not active_routes:
                 try:
+                    # Проверяем время для благодарности
+                    tz = pytz.timezone(config.TIMEZONE)
+                    now = datetime.now(tz)
+                    if now.hour < 19:
+                        text = "✅ Всі маршрути завершені\n\n🎉 Сьогодні усі колеги-водії завершили до 19:00. Дякуємо! 👏🚚"
+                    else:
+                        text = "✅ Всі маршрути завершені"
+
                     await context.bot.send_message(
                         chat_id=config.REPORT_CHAT_ID,
-                        text="✅ Всі маршрути завершені"
+                        text=text
                     )
-                    logger.info("Отправлено уведомление: все маршруты завершены")
+                    logger.info(f"Отправлено уведомление: все маршруты завершены (hour={now.hour})")
                 except Exception as e:
                     logger.warning(f"Не удалось отправить уведомление о завершении: {e}")
 
