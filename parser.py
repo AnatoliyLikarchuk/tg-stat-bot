@@ -328,6 +328,20 @@ class MessageParser:
             if driver_name.lower() not in self.SKIP_WORDS and route_num not in drivers_before:
                 drivers_before[route_num] = driver_name
 
+        # Паттерн 4: N маршрут (номер перед словом "маршрут", без имени рядом)
+        # Пример: "Карпенко завершив 3 маршрут" — имя в начале строки
+        pattern4 = r"(\d+)\s+мар[шщ]рут"
+        matches4 = re.findall(pattern4, text, re.IGNORECASE | re.UNICODE)
+        routes_from_pattern4 = set(matches4)  # номера маршрутов из этого паттерна
+
+        # Ищем имя водителя в начале строки (первое слово с заглавной буквы)
+        first_word_match = re.match(r"([А-ЯІЇЄҐЁ][а-яіїєґё']+)", text.strip())
+        first_word_driver = None
+        if first_word_match:
+            candidate = first_word_match.group(1)
+            if candidate.lower() not in self.SKIP_WORDS:
+                first_word_driver = candidate
+
         for route_num, driver_after in matches1:
             driver_name = None
 
@@ -350,6 +364,14 @@ class MessageParser:
             for route_num, driver_name in drivers_before.items():
                 # Нормализуем имя водителя (рус → укр)
                 driver_name = self.normalize_driver_name(driver_name)
+                results.append((route_num, driver_name))
+
+        # Если всё ещё ничего — пробуем паттерн 4 (N маршрут) с именем из начала строки
+        if not results and routes_from_pattern4:
+            for route_num in routes_from_pattern4:
+                driver_name = first_word_driver
+                if driver_name:
+                    driver_name = self.normalize_driver_name(driver_name)
                 results.append((route_num, driver_name))
 
         return results
@@ -386,6 +408,8 @@ if __name__ == "__main__":
         "Качаєнко\nМаршрут 9 закрито.",
         # Формат "Имя N маршрут глагол" (номер перед словом маршрут)
         "Довгаль 6 маршрут закрив",
+        # Формат "Имя глагол N маршрут" (глагол между именем и номером)
+        "Карпенко завершив 3 маршрут",
     ]
 
     for msg in test_messages:
