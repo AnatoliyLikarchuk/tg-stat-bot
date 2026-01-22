@@ -334,6 +334,14 @@ class MessageParser:
         matches4 = re.findall(pattern4, text, re.IGNORECASE | re.UNICODE)
         routes_from_pattern4 = set(matches4)  # номера маршрутов из этого паттерна
 
+        # Паттерн 5: Имя+Цифра+маршрут (слитное написание без пробелов)
+        # Пример: "Карпенко7маршрут завершив"
+        pattern5 = r"([А-ЯІЇЄҐЁ][а-яіїєґё']+)(\d+)мар[шщ]рут"
+        matches5 = re.findall(pattern5, text, re.IGNORECASE | re.UNICODE)
+        for driver_name, route_num in matches5:
+            if driver_name.lower() not in self.SKIP_WORDS and route_num not in drivers_before:
+                drivers_before[route_num] = driver_name
+
         # Ищем имя водителя в начале строки (первое слово с заглавной буквы)
         first_word_match = re.match(r"([А-ЯІЇЄҐЁ][а-яіїєґё']+)", text.strip())
         first_word_driver = None
@@ -410,6 +418,8 @@ if __name__ == "__main__":
         "Довгаль 6 маршрут закрив",
         # Формат "Имя глагол N маршрут" (глагол между именем и номером)
         "Карпенко завершив 3 маршрут",
+        # Формат слитный "Имя+Цифра+маршрут" (без пробелов)
+        "Карпенко7маршрут завершив",
     ]
 
     for msg in test_messages:
