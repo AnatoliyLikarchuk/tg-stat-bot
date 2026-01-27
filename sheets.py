@@ -70,10 +70,14 @@ class SheetsManager:
         """Проверяет наличие заголовков, добавляет если нужно."""
         try:
             first_row = self.worksheet.row_values(1)
-            if not first_row or first_row != self.HEADERS:
+            # Проверяем первые 8 колонок и очищаем лишние справа
+            if not first_row or first_row[:8] != self.HEADERS:
                 self.worksheet.update("A1:H1", [self.HEADERS])
                 # Формула автонумерации (русская локаль - точка с запятой)
                 self.worksheet.update("A2", [['=ARRAYFORMULA(IF(B2:B="";"";ROW(B2:B)-1))']], value_input_option='USER_ENTERED')
+            # Очищаем лишние колонки справа (I, J, K) если там что-то есть
+            if len(first_row) > 8:
+                self.worksheet.batch_clear(["I1:K1"])
         except Exception:
             self.worksheet.update("A1:H1", [self.HEADERS])
             self.worksheet.update("A2", [['=ARRAYFORMULA(IF(B2:B="";"";ROW(B2:B)-1))']], value_input_option='USER_ENTERED')
@@ -116,7 +120,7 @@ class SheetsManager:
     def get_stats_for_period(self, days: int = 7) -> dict:
         """Получает статистику за указанное количество дней."""
         try:
-            all_records = self.worksheet.get_all_records()
+            all_records = self.worksheet.get_all_records(expected_headers=self.HEADERS)
             today = datetime.now(TZ)
 
             stats = {
@@ -145,7 +149,7 @@ class SheetsManager:
     def _get_stats_for_date(self, date_str: str) -> dict:
         """Получает статистику за конкретную дату."""
         try:
-            all_records = self.worksheet.get_all_records()
+            all_records = self.worksheet.get_all_records(expected_headers=self.HEADERS)
 
             stats = {
                 "total_events": 0,
@@ -187,7 +191,7 @@ class SheetsManager:
         """Получает активные маршруты (начаты, но не завершены)."""
         try:
             today = datetime.now(TZ).strftime("%d.%m.%Y")
-            all_records = self.worksheet.get_all_records()
+            all_records = self.worksheet.get_all_records(expected_headers=self.HEADERS)
 
             routes_status = {}  # {route_number: last_status}
 
