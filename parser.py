@@ -223,9 +223,22 @@ class MessageParser:
                     ))
             else:
                 # Альтернативный формат: "Водитель выехал" (без номера маршрута)
-                alt_match = self.compiled["departure_alt"].search(text)
-                if alt_match:
-                    driver_name = alt_match.group(1)
+                # Сначала пробуем взять имя из начала строки
+                first_word_match = re.match(r"(?:\d{1,2}[.:]\d{2}\s+)?([А-ЯІЇЄҐЁ][а-яіїєґё']+)", text.strip())
+                driver_name = None
+                if first_word_match:
+                    candidate = first_word_match.group(1)
+                    if candidate.lower() not in self.SKIP_WORDS:
+                        driver_name = candidate
+                # Если не нашли в начале, пробуем слово перед "выехал/виїхав"
+                if not driver_name:
+                    alt_match = self.compiled["departure_alt"].search(text)
+                    if alt_match:
+                        candidate = alt_match.group(1)
+                        if candidate.lower() not in self.SKIP_WORDS:
+                            driver_name = candidate
+                if driver_name:
+                    driver_name = self.normalize_driver_name(driver_name)
                     events.append(ParsedEvent(
                         event_type=self.EVENT_DEPARTURE,
                         time=time_str,
@@ -297,6 +310,9 @@ class MessageParser:
         # Глаголы выезда
         "выехал", "выехала", "выехали",
         "виїхав", "виїхала", "виїхали",
+        # Слова загрузки (рус/укр)
+        "завантажено", "завантажений", "завантажена",
+        "загружен", "загружена", "загружено",
         # Прочее
         "тест", "тестов", "точка", "точку", "точек",
     }
