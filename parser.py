@@ -87,7 +87,7 @@ class MessageParser:
 
         # Маршрут завершён (рус/укр)
         # Поддерживает: "маршрут 1 завершен", "закончил", "завершив", "закрыт", "закрыл" и т.д.
-        "route_complete": r"мар[шщ]рут\s+\d*\s*(?:заверш|закінч|закри)|(?:все\s+)?развез|(?:всё\s+)?развёз|мар[шщ]рут\s+закінчи|закінчив|закончил|завершив|завершен[оа]?|завершён|мар[шщ]рут\s*\d*\s*закрит[оа]?|закрыт|закрыл[аои]?",
+        "route_complete": r"мар[шщ]рут\s+\d*\s*(?:заверш|закінч|закри)|(?:все\s+)?развез|(?:всё\s+)?развёз|мар[шщ]рут\s+закінчи|закінчив|закончил|завершив|завершен[оа]?|завершён|мар[шщ]рут\s*\d*\s*закрит[оа]?|закрит[оа]?|закрыт|закрыл[аои]?",
 
         # Все маршруты выехали
         "all_departed": r"все\s+мар[шщ]рут[ыи]\s+выехал",
@@ -305,6 +305,7 @@ class MessageParser:
         "завершив", "завершила", "завершили",
         "закрив", "закрила", "закрили",
         "закрито",
+        "закрит", "закрита",
         # Глаголы завершения (рус)
         "закрыт", "закрыта", "закрыто",
         # Глаголы выезда
@@ -358,6 +359,11 @@ class MessageParser:
             if driver_name.lower() not in self.SKIP_WORDS and route_num not in drivers_before:
                 drivers_before[route_num] = driver_name
 
+        # Паттерн 6: Имя+Цифра+глагол завершения (без слова "маршрут")
+        # Пример: "Карпенко5завершив", "Косич3закрив"
+        pattern6 = r"([А-ЯІЇЄҐЁ][а-яіїєґё']+)(\d+)(?:заверш|закінч|закри[втл]|закрыл|закончил|развез|завершив|закінчив)"
+        matches6 = re.findall(pattern6, text, re.IGNORECASE | re.UNICODE)
+
         # Ищем имя водителя в начале строки (первое слово с заглавной буквы)
         first_word_match = re.match(r"([А-ЯІЇЄҐЁ][а-яіїєґё']+)", text.strip())
         first_word_driver = None
@@ -397,6 +403,13 @@ class MessageParser:
                 if driver_name:
                     driver_name = self.normalize_driver_name(driver_name)
                 results.append((route_num, driver_name))
+
+        # Последний fallback: паттерн 6 (Имя+Цифра+глагол без "маршрут")
+        if not results and matches6:
+            for driver_name, route_num in matches6:
+                if driver_name.lower() not in self.SKIP_WORDS:
+                    driver_name = self.normalize_driver_name(driver_name)
+                    results.append((route_num, driver_name))
 
         return results
 
@@ -438,6 +451,10 @@ if __name__ == "__main__":
         "Карпенко7маршрут завершив",
         # Формат "Имя маршрут N закрыл" (глагол закрыл в конце)
         "Косич маршрут 1 закрыл",
+        # Закрит (опечатка ы→и)
+        "Маршрут 5 Карпенко закрит 17:42",
+        # Имя+Цифра+глагол без "маршрут"
+        "Карпенко5завершив",
     ]
 
     for msg in test_messages:

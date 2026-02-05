@@ -5,6 +5,7 @@ Telegram-бот для сбора статистики логистики.
 
 import asyncio
 import logging
+import time as time_module
 from datetime import datetime
 import pytz
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReactionTypeEmoji
@@ -39,6 +40,10 @@ logger = logging.getLogger(__name__)
 
 # Инициализация парсера
 parser = MessageParser()
+
+# Дедупликация: {(chat_id, event_type, route, driver): timestamp}
+_recent_events: dict = {}
+DEDUP_WINDOW_SEC = 60
 
 
 def check_access(update: Update) -> bool:
@@ -230,6 +235,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not events:
         return  # Сообщение не содержит логистических событий
 
+    # Дедупликация: фильтруем события, которые уже были недавно
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    now = time_module.time()
+
+    # Чистим старые записи (старше 5 минут)
+    cutoff = now - 300
+    stale_keys = [k for k, t in _recent_events.items() if t < cutoff]
+    for k in stale_keys:
+        del _recent_events[k]
+
+    unique_events = []
+    for event in events:
+        key = (chat_id, event.event_type, event.route_number, event.driver)
+        if key in _recent_events and (now - _recent_events[key]) < DEDUP_WINDOW_SEC:
+            logger.info(f"[DEDUP] Пропущен дубликат: {event.event_type} маршрут={event.route_number} водитель={event.driver}")
+            continue
+        _recent_events[key] = now
+        unique_events.append(event)
+
+    events = unique_events
+    if not events:
+        return  # Все события — дубликаты
+
     # Получаем название группы
     group_name = ""
     if update.effective_chat:
@@ -246,6 +274,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.warning(f"Не удалось поставить реакцию: {e}")
 
+        # Проверяем несоответствие маршрутов: водитель закрыл не тот маршрут
+        tz = pytz.timezone(config.TIMEZONE)
+        today_str = datetime.now(tz).strftime("%d.%m.%Y")
+        for event in events:
+            if event.event_type == "маршрут_завершён" and event.driver and event.route_number:
+                try:
+                    departed_route = sheets_manager.get_driver_departure_route(event.driver, today_str)
+                    if departed_route and departed_route != event.route_number:
+                        warn_text = (
+                            f"⚠️ Увага: {event.driver} виїхав на маршрут {departed_route}, "
+                            f"але закрив маршрут {event.route_number}. Перевірте номер маршруту."
+                        )
+                        await context.bot.send_message(
+                            chat_id=update.effective_chat.id,
+                            text=warn_text
+                        )
+                        logger.info(f"[WARN] Несоответствие маршрутов: {event.driver} выехал {departed_route}, закрыл {event.route_number}")
+                except Exception as e:
+                    logger.warning(f"Ошибка проверки несоответствия маршрутов: {e}")
+
         # Проверяем: если закрыли последний маршрут — уведомляем группу
         has_route_completed = any(e.event_type == "маршрут_завершён" for e in events)
         if has_route_completed and config.REPORT_CHAT_ID:
@@ -258,7 +306,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not active_routes:
                 try:
                     # Проверяем время для благодарности
-                    tz = pytz.timezone(config.TIMEZONE)
                     now = datetime.now(tz)
                     if now.hour < 19:
                         text = "✅ Всі маршрути завершені\n\n🎉 Сьогодні усі колеги-водії завершили до 19:00. Дякуємо! 👏🚚"

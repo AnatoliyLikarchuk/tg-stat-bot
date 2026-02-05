@@ -239,6 +239,28 @@ class SheetsManager:
             print(f"Ошибка получения активных маршрутов: {e}")
             return []
 
+    def get_driver_departure_route(self, driver: str, date: str) -> Optional[str]:
+        """Ищет номер маршрута, с которым водитель выехал сегодня."""
+        try:
+            all_records = self.worksheet.get_all_records(expected_headers=self.HEADERS)
+            driver_lower = driver.lower()
+
+            for record in all_records:
+                if record.get("Дата") != date:
+                    continue
+                if record.get("Событие") != "выезд":
+                    continue
+                record_driver = str(record.get("Водитель", "")).lower()
+                if record_driver == driver_lower:
+                    route = self._normalize_route(record.get("Маршрут", ""))
+                    if route:
+                        return route
+            return None
+
+        except Exception as e:
+            print(f"Ошибка поиска маршрута выезда: {e}")
+            return None
+
 
 # Синглтон
 sheets_manager = SheetsManager()
