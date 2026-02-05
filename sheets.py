@@ -4,6 +4,7 @@
 """
 
 import gspread
+import unicodedata
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -187,6 +188,24 @@ class SheetsManager:
         if event_type == "проблема":
             stats["problems"].append(record.get("Исходное сообщение", ""))
 
+    # Статусы, означающие завершение маршрута
+    CLOSED_STATUSES = {
+        unicodedata.normalize('NFC', s) for s in [
+            "маршрут_завершён",   # основной статус (с ё)
+            "маршрут_завершен",   # вариант без ё (на случай ручного ввода)
+            "все_выехали",
+        ]
+    }
+
+    @staticmethod
+    def _normalize_route(route_raw) -> str:
+        """Приводит номер маршрута к строке (gspread может вернуть int или float)."""
+        if isinstance(route_raw, float):
+            return str(int(route_raw))
+        if isinstance(route_raw, int):
+            return str(route_raw)
+        return str(route_raw).strip()
+
     def get_active_routes(self) -> List[dict]:
         """Получает активные маршруты (начаты, но не завершены)."""
         try:
@@ -197,7 +216,7 @@ class SheetsManager:
 
             for record in all_records:
                 if record.get("Дата") == today:
-                    route = record.get("Маршрут", "")
+                    route = self._normalize_route(record.get("Маршрут", ""))
                     # Берём только первую запись (самую новую, т.к. новые сверху)
                     if route and route not in routes_status:
                         routes_status[route] = {
@@ -208,9 +227,10 @@ class SheetsManager:
                         }
 
             # Фильтруем только активные (не завершённые)
+            # Нормализуем Unicode (ё может быть NFC или NFD после Google Sheets)
             active = [
                 r for r in routes_status.values()
-                if r["status"] not in ["маршрут_завершён", "все_выехали"]
+                if unicodedata.normalize('NFC', str(r["status"])) not in self.CLOSED_STATUSES
             ]
 
             return active
