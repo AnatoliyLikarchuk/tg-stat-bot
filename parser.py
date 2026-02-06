@@ -261,13 +261,23 @@ class MessageParser:
             # Без номера маршрута — не записываем (чтобы не ломать логику активных маршрутов)
 
         if self.compiled["problem"].search(text_lower):
-            events.append(ParsedEvent(
-                event_type=self.EVENT_PROBLEM,
-                time=time_str,
-                route_number=None,
-                driver=None,
-                raw_text=text
-            ))
+            # Проблема засчитывается только если есть контекст маршрута
+            # или в сообщении уже найдены другие логистические события.
+            # Это отсекает нерелевантные сообщения вроде
+            # "Суши Швілі точку не доставив клієнт не було розрахунку"
+            routes_drivers = self._extract_routes_drivers(text)
+            route_num = routes_drivers[0][0] if routes_drivers else None
+            driver_name = routes_drivers[0][1] if routes_drivers else None
+            if route_num or events:
+                if driver_name:
+                    driver_name = self.normalize_driver_name(driver_name)
+                events.append(ParsedEvent(
+                    event_type=self.EVENT_PROBLEM,
+                    time=time_str,
+                    route_number=route_num,
+                    driver=driver_name,
+                    raw_text=text
+                ))
 
         # Поздняя доставка: "5 точек после 19"
         late_match = self.compiled["late_delivery"].search(text_lower)
@@ -426,7 +436,9 @@ if __name__ == "__main__":
         "8.30 выехал маршрут 2 Косич 3 ходка",
         "Все маршруты выехали",
         "Маршрут завершив",
-        "Точку не доставив",
+        "Точку не доставив",  # без маршрута — НЕ должно распознаваться
+        "Маршрут 5 Карпенко точку не доставив",  # с маршрутом — проблема
+        "Святопетрівське Суши Швілі точку не доставив клієнт не було розрахунку",  # НЕ логистика — должно игнорироваться
         "Завтра с утра завезу",
         # Новые тесты (2026-01-15)
         "Бєльченко маршрут 66 початок зборки",
