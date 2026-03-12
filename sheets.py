@@ -3,6 +3,7 @@
 Сохраняет события логистики в таблицу.
 """
 
+import logging
 import gspread
 import unicodedata
 from oauth2client.service_account import ServiceAccountCredentials
@@ -12,6 +13,8 @@ from pathlib import Path
 from typing import List, Optional
 from parser import ParsedEvent
 from config import config
+
+logger = logging.getLogger(__name__)
 
 # Timezone из конфига
 TZ = ZoneInfo(config.TIMEZONE)
@@ -39,7 +42,7 @@ class SheetsManager:
 
             creds_path = Path(__file__).parent / config.GOOGLE_SHEETS_CREDENTIALS_FILE
             if not creds_path.exists():
-                print(f"Ошибка: Файл credentials не найден: {creds_path}")
+                logger.error(f"Файл credentials не найден: {creds_path}")
                 return False
 
             credentials = ServiceAccountCredentials.from_json_keyfile_name(
@@ -52,7 +55,7 @@ class SheetsManager:
                 self.spreadsheet = self.client.open(config.GOOGLE_SHEETS_SPREADSHEET_NAME)
             except gspread.SpreadsheetNotFound:
                 self.spreadsheet = self.client.create(config.GOOGLE_SHEETS_SPREADSHEET_NAME)
-                print(f"Создана новая таблица: {config.GOOGLE_SHEETS_SPREADSHEET_NAME}")
+                logger.info(f"Создана новая таблица: {config.GOOGLE_SHEETS_SPREADSHEET_NAME}")
 
             # Получаем первый лист
             self.worksheet = self.spreadsheet.sheet1
@@ -60,11 +63,11 @@ class SheetsManager:
             # Проверяем/добавляем заголовки
             self._ensure_headers()
 
-            print(f"Подключено к таблице: {self.spreadsheet.url}")
+            logger.info(f"Подключено к таблице: {self.spreadsheet.url}")
             return True
 
         except Exception as e:
-            print(f"Ошибка подключения к Google Sheets: {e}")
+            logger.error(f"Ошибка подключения к Google Sheets: {e}")
             return False
 
     def _ensure_headers(self):
@@ -102,7 +105,7 @@ class SheetsManager:
             self.worksheet.update("A2:A3", [['=ARRAYFORMULA(IF(B2:B="";"";ROW(B2:B)-1))'], ['']], value_input_option='USER_ENTERED')
             return True
         except Exception as e:
-            print(f"Ошибка записи в таблицу: {e}")
+            logger.error(f"Ошибка записи в таблицу: {e}")
             return False
 
     def add_events(self, events: List[ParsedEvent], group_name: str = "") -> int:
@@ -144,7 +147,7 @@ class SheetsManager:
             return stats
 
         except Exception as e:
-            print(f"Ошибка получения статистики: {e}")
+            logger.error(f"Ошибка получения статистики: {e}")
             return {}
 
     def _get_stats_for_date(self, date_str: str) -> dict:
@@ -167,7 +170,7 @@ class SheetsManager:
             return stats
 
         except Exception as e:
-            print(f"Ошибка получения статистики: {e}")
+            logger.error(f"Ошибка получения статистики: {e}")
             return {}
 
     def _add_to_stats(self, stats: dict, record: dict):
@@ -236,7 +239,7 @@ class SheetsManager:
             return active
 
         except Exception as e:
-            print(f"Ошибка получения активных маршрутов: {e}")
+            logger.error(f"Ошибка получения активных маршрутов: {e}")
             return []
 
     def get_driver_departure_route(self, driver: str, date: str) -> Optional[str]:
@@ -258,7 +261,7 @@ class SheetsManager:
             return None
 
         except Exception as e:
-            print(f"Ошибка поиска маршрута выезда: {e}")
+            logger.error(f"Ошибка поиска маршрута выезда: {e}")
             return None
 
 
