@@ -86,6 +86,26 @@ class SheetsManager:
             self.worksheet.update("A1:H1", [self.HEADERS])
             self.worksheet.update("A2", [['=ARRAYFORMULA(IF(B2:B="";"";ROW(B2:B)-1))']], value_input_option='USER_ENTERED')
 
+    def _get_recent_records(self, max_rows: int = 200) -> List[dict]:
+        """Читает только первые max_rows строк данных (новые сверху).
+
+        Вместо get_all_records() который тянет ВСЕ строки (2000+),
+        читаем только нужный диапазон. Для сегодняшних данных хватает ~200,
+        для недельных ~500.
+        """
+        # +1 для заголовка
+        data = self.worksheet.get(f'A1:H{max_rows + 1}')
+        if not data or len(data) < 2:
+            return []
+
+        headers = data[0]
+        records = []
+        for row in data[1:]:
+            # Дополняем короткие строки пустыми значениями
+            padded = row + [''] * (len(headers) - len(row))
+            records.append(dict(zip(headers, padded)))
+        return records
+
     def add_event(self, event: ParsedEvent, group_name: str = "") -> bool:
         """Добавляет событие в таблицу (вставляет сверху, сразу после заголовка)."""
         try:
@@ -124,7 +144,7 @@ class SheetsManager:
     def get_stats_for_period(self, days: int = 7) -> dict:
         """Получает статистику за указанное количество дней."""
         try:
-            all_records = self.worksheet.get_all_records(expected_headers=self.HEADERS)
+            all_records = self._get_recent_records(max_rows=days * 80)
             today = datetime.now(TZ)
 
             stats = {
@@ -153,7 +173,7 @@ class SheetsManager:
     def _get_stats_for_date(self, date_str: str) -> dict:
         """Получает статистику за конкретную дату."""
         try:
-            all_records = self.worksheet.get_all_records(expected_headers=self.HEADERS)
+            all_records = self._get_recent_records(max_rows=200)
 
             stats = {
                 "total_events": 0,
@@ -213,7 +233,7 @@ class SheetsManager:
         """Получает активные маршруты (начаты, но не завершены)."""
         try:
             today = datetime.now(TZ).strftime("%d.%m.%Y")
-            all_records = self.worksheet.get_all_records(expected_headers=self.HEADERS)
+            all_records = self._get_recent_records(max_rows=200)
 
             routes_status = {}  # {route_number: last_status}
 
@@ -245,7 +265,7 @@ class SheetsManager:
     def get_driver_departure_route(self, driver: str, date: str) -> Optional[str]:
         """Ищет номер маршрута, с которым водитель выехал сегодня."""
         try:
-            all_records = self.worksheet.get_all_records(expected_headers=self.HEADERS)
+            all_records = self._get_recent_records(max_rows=200)
             driver_lower = driver.lower()
 
             for record in all_records:
