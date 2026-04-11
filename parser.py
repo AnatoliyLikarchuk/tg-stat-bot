@@ -99,10 +99,10 @@ class MessageParser:
         "late_delivery": r"(\d+)\s+точ[е|о]к\s+после\s+(\d+)",
 
         # Номер маршрута (с учётом опечаток: марщрут, маршру)
-        "route": r"мар?[шщ]рут?\s*(\d+)",
+        "route": r"(?:мар?[шщ]рут?|мршт)\s*(\d+)",
 
         # Имя водителя (после номера маршрута)
-        "driver": r"мар?[шщ]рут?\s*\d+\s+([А-ЯІЇЄҐа-яіїєґA-Za-z]+)",
+        "driver": r"(?:мар?[шщ]рут?|мршт)\s*\d+\s+([А-ЯІЇЄҐа-яіїєґA-Za-z]+)",
     }
 
     def __init__(self):
@@ -338,11 +338,11 @@ class MessageParser:
 
         # Паттерн 1: маршрут N ИмяВодителя (стандартный, с учётом опечаток: марщрут, маршру)
         # Добавлено ёЁ в класс символов (не входит в диапазон а-я в Unicode)
-        pattern1 = r"мар?[шщ]рут?\s*(\d+)\s*([А-ЯІЇЄҐЁа-яіїєґё]+)?"
+        pattern1 = r"(?:мар?[шщ]рут?|мршт)\s*(\d+)\s*([А-ЯІЇЄҐЁа-яіїєґё]+)?"
         matches1 = re.findall(pattern1, text, re.IGNORECASE | re.UNICODE)
 
         # Паттерн 2: ИмяВодителя маршрут N (водитель перед маршрутом, включая перенос строки)
-        pattern2 = r"([А-ЯІЇЄҐЁ][а-яіїєґё']+)\s+мар?[шщ]рут?\s*(\d+)"
+        pattern2 = r"([А-ЯІЇЄҐЁ][а-яіїєґё']+)\s+(?:мар?[шщ]рут?|мршт)\s*(\d+)"
         matches2 = re.findall(pattern2, text, re.IGNORECASE | re.UNICODE)
         drivers_before = {route_num: driver_name for driver_name, route_num in matches2
                          if driver_name.lower() not in self.SKIP_WORDS}
