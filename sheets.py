@@ -4,6 +4,7 @@
 """
 
 import logging
+import time
 import gspread
 import unicodedata
 from oauth2client.service_account import ServiceAccountCredentials
@@ -106,27 +107,60 @@ class SheetsManager:
             records.append(dict(zip(headers, padded)))
         return records
 
+    # HTTP-коды, при которых имеет смысл повторить запрос
+    _RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
+    _RETRY_DELAYS = (1, 3, 9)  # секунды между попытками (всего 4 попытки)
+
+    @classmethod
+    def _is_transient_error(cls, exc: Exception) -> bool:
+        """True если ошибку стоит ретраить (временная недоступность API)."""
+        if isinstance(exc, gspread.exceptions.APIError):
+            status = getattr(exc.response, "status_code", None)
+            if status in cls._RETRY_STATUS_CODES:
+                return True
+        msg = str(exc).lower()
+        return any(s in msg for s in ("unavailable", "timeout", "timed out", "connection"))
+
     def add_event(self, event: ParsedEvent, group_name: str = "") -> bool:
-        """Добавляет событие в таблицу (вставляет сверху, сразу после заголовка)."""
-        try:
-            row = [
-                "",  # A - автонумерация формулой
-                datetime.now(TZ).strftime("%d.%m.%Y"),
-                event.time or datetime.now(TZ).strftime("%H:%M"),
-                event.event_type,
-                event.route_number or "",
-                event.driver or "",
-                event.raw_text[:200],  # Ограничиваем длину
-                group_name
-            ]
-            # Вставляем новую строку сразу после заголовка (позиция 2)
-            self.worksheet.insert_row(row, index=2)
-            # insert_row сдвигает формулу из A2 в A3 — нужно её очистить и восстановить в A2
-            self.worksheet.update("A2:A3", [['=ARRAYFORMULA(IF(B2:B="";"";ROW(B2:B)-1))'], ['']], value_input_option='USER_ENTERED')
-            return True
-        except Exception as e:
-            logger.error(f"Ошибка записи в таблицу: {e}")
-            return False
+        """Добавляет событие в таблицу (вставляет сверху, сразу после заголовка).
+
+        При временных ошибках Google API (503/429/таймауты) делает retry с backoff.
+        """
+        row = [
+            "",  # A - автонумерация формулой
+            datetime.now(TZ).strftime("%d.%m.%Y"),
+            event.time or datetime.now(TZ).strftime("%H:%M"),
+            event.event_type,
+            event.route_number or "",
+            event.driver or "",
+            event.raw_text[:200],  # Ограничиваем длину
+            group_name
+        ]
+
+        last_error: Optional[Exception] = None
+        for attempt in range(len(self._RETRY_DELAYS) + 1):
+            try:
+                # Вставляем новую строку сразу после заголовка (позиция 2)
+                self.worksheet.insert_row(row, index=2)
+                # insert_row сдвигает формулу из A2 в A3. Восстанавливаем в A2
+                # и ПОЛНОСТЬЮ очищаем A3 (запись '' оставила бы пустую строку, из-за
+                # которой ARRAYFORMULA не может раскрыться — будет #REF!).
+                self.worksheet.update("A2", [['=ARRAYFORMULA(IF(B2:B="";"";ROW(B2:B)-1))']], value_input_option='USER_ENTERED')
+                self.worksheet.batch_clear(["A3"])
+                if attempt > 0:
+                    logger.info(f"Запись в таблицу удалась с попытки {attempt + 1}")
+                return True
+            except Exception as e:
+                last_error = e
+                if attempt < len(self._RETRY_DELAYS) and self._is_transient_error(e):
+                    delay = self._RETRY_DELAYS[attempt]
+                    logger.warning(f"Временная ошибка Sheets ({e}), retry через {delay}с (попытка {attempt + 2})")
+                    time.sleep(delay)
+                    continue
+                break
+
+        logger.error(f"Ошибка записи в таблицу: {last_error}")
+        return False
 
     def add_events(self, events: List[ParsedEvent], group_name: str = "") -> int:
         """Добавляет несколько событий. Возвращает количество успешных записей."""

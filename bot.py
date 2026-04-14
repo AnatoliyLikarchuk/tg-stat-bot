@@ -246,6 +246,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del _recent_events[k]
 
     unique_events = []
+    event_keys = []  # параллельный список ключей дедупа для rollback при ошибке
     for event in events:
         key = (chat_id, event.event_type, event.route_number, event.driver)
         if key in _recent_events and (now - _recent_events[key]) < DEDUP_WINDOW_SEC:
@@ -253,6 +254,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             continue
         _recent_events[key] = now
         unique_events.append(event)
+        event_keys.append(key)
 
     events = unique_events
     if not events:
@@ -263,8 +265,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat:
         group_name = update.effective_chat.title or ""
 
-    # Сохраняем события
-    saved = sheets_manager.add_events(events, group_name)
+    # Сохраняем события по одному — чтобы откатить дедуп для тех,
+    # которые не записались (тогда следующая копия сообщения сможет повторить запись)
+    saved = 0
+    for event, key in zip(events, event_keys):
+        if sheets_manager.add_event(event, group_name):
+            saved += 1
+        else:
+            # Запись не удалась — убираем из дедупа, чтобы retry-копия прошла
+            _recent_events.pop(key, None)
+            logger.warning(f"[DEDUP] Откат кэша после ошибки записи: {event.event_type} маршрут={event.route_number} водитель={event.driver}")
 
     if saved > 0:
         logger.info(f"Сохранено {saved} событий из группы '{group_name}'")
