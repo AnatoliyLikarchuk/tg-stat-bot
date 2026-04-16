@@ -207,18 +207,23 @@ async def handle_private_text(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик всех текстовых сообщений в группе."""
-    if not update.message:
+    """Обработчик всех текстовых сообщений в группе (включая отредактированные)."""
+    msg = update.message or update.edited_message
+    if not msg:
         return
 
+    is_edited = update.edited_message is not None
+
     # Получаем текст из message.text или message.caption (для фото/документов)
-    text = update.message.text or update.message.caption
+    text = msg.text or msg.caption
     if not text:
         return
 
     # DEBUG: логируем все сообщения из групп
-    is_caption = update.message.caption is not None
-    logger.info(f"[DEBUG] Получено{'(caption)' if is_caption else ''}: '{text[:100]}' от {update.effective_user.first_name if update.effective_user else 'unknown'}")
+    is_caption = msg.caption is not None
+    edit_tag = "(edited)" if is_edited else ""
+    caption_tag = "(caption)" if is_caption else ""
+    logger.info(f"[DEBUG] Получено{edit_tag}{caption_tag}: '{text[:100]}' от {update.effective_user.first_name if update.effective_user else 'unknown'}")
 
     # Игнорируем кнопки в группах
     if text in ["📊 Статистика сегодня", "📈 За неделю", "🚗 Активные маршруты", "❓ Помощь"]:
@@ -280,9 +285,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"Сохранено {saved} событий из группы '{group_name}'")
         # Ставим реакцию 🏆 как подтверждение записи
         try:
-            await update.message.set_reaction(reaction=[ReactionTypeEmoji("🏆")])
+            await msg.set_reaction(reaction=[ReactionTypeEmoji("🏆")])
         except Exception as e:
             logger.warning(f"Не удалось поставить реакцию: {e}")
+
+        # Предупреждение: выезд без номера маршрута
+        for event in events:
+            if event.event_type == "выезд" and not event.route_number and event.driver:
+                try:
+                    warn_text = (
+                        f"⚠️ {event.driver} — виїзд зафіксовано, "
+                        f"але номер маршруту не вказано. Вкажіть номер маршруту."
+                    )
+                    await context.bot.send_message(
+                        chat_id=update.effective_chat.id,
+                        text=warn_text
+                    )
+                    logger.info(f"[WARN] Выезд без номера маршрута: {event.driver}")
+                except Exception as e:
+                    logger.warning(f"Не удалось отправить предупреждение: {e}")
 
         # Проверяем несоответствие маршрутов: водитель закрыл не тот маршрут
         tz = pytz.timezone(config.TIMEZONE)
@@ -291,7 +312,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if event.event_type == "маршрут_завершён" and event.driver and event.route_number:
                 try:
                     departed_route = sheets_manager.get_driver_departure_route(event.driver, today_str)
-                    if departed_route and departed_route != event.route_number:
+                    if not departed_route:
+                        warn_text = (
+                            f"⚠️ Увага: {event.driver} завершив маршрут {event.route_number}, "
+                            f"але виїзд не зафіксовано. Вкажіть час виїзду."
+                        )
+                        await context.bot.send_message(
+                            chat_id=update.effective_chat.id,
+                            text=warn_text
+                        )
+                        logger.info(f"[WARN] Завершение без выезда: {event.driver} маршрут {event.route_number}")
+                    elif departed_route != event.route_number:
                         warn_text = (
                             f"⚠️ Увага: {event.driver} виїхав на маршрут {departed_route}, "
                             f"але закрив маршрут {event.route_number}. Перевірте номер маршруту."
@@ -375,6 +406,13 @@ def main():
     # Обработчик всех текстовых сообщений в группах (включая подписи к фото/документам)
     app.add_handler(MessageHandler(
         (filters.TEXT | filters.CAPTION) & ~filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP),
+        handle_message
+    ))
+
+    # Обработчик отредактированных сообщений в группах
+    app.add_handler(MessageHandler(
+        (filters.TEXT | filters.CAPTION) & ~filters.COMMAND & (filters.ChatType.GROUP | filters.ChatType.SUPERGROUP)
+        & filters.UpdateType.EDITED_MESSAGE,
         handle_message
     ))
 

@@ -84,6 +84,7 @@ class MessageParser:
         # "выехал", "виїхав"
         "departure": r"(?:выехал[аио]?|виїхав|виїхала|виїхали)(?:\s+(?:мар?[шщ]рут|мршт))?",
         "departure_alt": r"([А-ЯІЇЄҐа-яіїєґ]+)\s+(?:выехал|виїхав)",  # Горбатко выехал/виїхав
+        "departure_name_after": r"(?:выехал[аио]?|виїхав|виїхала|виїхали)\s+([А-ЯІЇЄҐЁ][а-яіїєґё']+)",  # выехал Роговский
 
         # Маршрут завершён (рус/укр)
         # Поддерживает: "маршрут 1 завершен", "закончил", "завершив", "закрыт", "закрыл" и т.д.
@@ -235,6 +236,13 @@ class MessageParser:
                     alt_match = self.compiled["departure_alt"].search(text)
                     if alt_match:
                         candidate = alt_match.group(1)
+                        if candidate.lower() not in self.SKIP_WORDS:
+                            driver_name = candidate
+                # Если не нашли перед, пробуем слово после "выехал/виїхав"
+                if not driver_name:
+                    after_match = self.compiled["departure_name_after"].search(text)
+                    if after_match:
+                        candidate = after_match.group(1)
                         if candidate.lower() not in self.SKIP_WORDS:
                             driver_name = candidate
                 if driver_name:
@@ -469,6 +477,8 @@ if __name__ == "__main__":
         "Карпенко5завершив",
         # Опечатка: "Машрут" вместо "Маршрут" (пропущена р)
         "Машрут 3 Грабиченко закончил",
+        # Формат "выехал ИМЯ мршт" (без номера маршрута)
+        "11:47 выехал Роговский мршт ",
     ]
 
     for msg in test_messages:
