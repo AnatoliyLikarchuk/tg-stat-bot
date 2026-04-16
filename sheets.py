@@ -284,30 +284,46 @@ class SheetsManager:
         return str(route_raw).strip()
 
     def get_active_routes(self) -> List[dict]:
-        """Получает активные маршруты (начаты, но не завершены)."""
+        """Получает активные маршруты (начаты, но не завершены).
+
+        Проверяет ВСЕ записи за день для каждого маршрута, а не только
+        верхнюю (последнюю вставленную). Это защищает от ситуации, когда
+        события записываются не в хронологическом порядке (например, выезд
+        отправлен позже завершения маршрута).
+        """
         try:
             today = datetime.now(TZ).strftime("%d.%m.%Y")
             all_records = self._get_recent_records(max_rows=200)
 
-            routes_status = {}  # {route_number: last_status}
+            routes_info = {}    # {route_number: info для отображения}
+            closed_routes = set()  # маршруты с событием завершения
 
             for record in all_records:
-                if record.get("Дата") == today:
-                    route = self._normalize_route(record.get("Маршрут", ""))
-                    # Берём только первую запись (самую новую, т.к. новые сверху)
-                    if route and route not in routes_status:
-                        routes_status[route] = {
-                            "route": route,
-                            "driver": record.get("Водитель", ""),
-                            "status": record.get("Событие", ""),
-                            "time": record.get("Время", "")
-                        }
+                if record.get("Дата") != today:
+                    continue
+                route = self._normalize_route(record.get("Маршрут", ""))
+                if not route:
+                    continue
 
-            # Фильтруем только активные (не завершённые)
-            # Нормализуем Unicode (ё может быть NFC или NFD после Google Sheets)
+                status = unicodedata.normalize('NFC', str(record.get("Событие", "")))
+
+                # Если маршрут завершён — запоминаем
+                if status in self.CLOSED_STATUSES:
+                    closed_routes.add(route)
+
+                # Берём первую (верхнюю) запись для отображения
+                if route not in routes_info:
+                    routes_info[route] = {
+                        "route": route,
+                        "driver": record.get("Водитель", ""),
+                        "status": record.get("Событие", ""),
+                        "time": record.get("Время", "")
+                    }
+
+            # Фильтруем: активные = есть записи, но НЕТ завершения
             active = [
-                r for r in routes_status.values()
-                if unicodedata.normalize('NFC', str(r["status"])) not in self.CLOSED_STATUSES
+                r for route, r in routes_info.items()
+                if route not in closed_routes
             ]
 
             return active
