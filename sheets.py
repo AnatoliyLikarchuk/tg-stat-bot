@@ -318,6 +318,58 @@ class SheetsManager:
             logger.error(f"Ошибка поиска маршрута выезда: {e}")
             return None
 
+    # Ожидаемая цепочка событий маршрута
+    EVENT_CHAIN = ["начало_сборки", "сборка_завершена", "выезд", "маршрут_завершён"]
+
+    def get_route_events_today(self, route_number: str, date: str) -> List[str]:
+        """Возвращает список типов событий для маршрута за сегодня."""
+        try:
+            all_records = self._get_recent_records(max_rows=200)
+            events = []
+            for record in all_records:
+                if record.get("Дата") != date:
+                    continue
+                route = self._normalize_route(record.get("Маршрут", ""))
+                if route == route_number:
+                    events.append(record.get("Событие", ""))
+            return events
+        except Exception as e:
+            logger.error(f"Ошибка получения событий маршрута: {e}")
+            return []
+
+    def check_chain_violation(self, event_type: str, route_number: str, date: str) -> Optional[str]:
+        """Проверяет нарушение цепочки событий маршрута.
+
+        Возвращает описание пропущенного шага или None если всё ок.
+        """
+        if event_type not in self.EVENT_CHAIN or not route_number:
+            return None
+
+        current_idx = self.EVENT_CHAIN.index(event_type)
+        if current_idx == 0:
+            return None  # начало_сборки — первый шаг, проверять нечего
+
+        existing_events = self.get_route_events_today(route_number, date)
+
+        # Проверяем все предыдущие шаги цепочки
+        missing = []
+        for i in range(current_idx):
+            expected = self.EVENT_CHAIN[i]
+            if expected not in existing_events:
+                missing.append(expected)
+
+        if missing:
+            missing_names = {
+                "начало_сборки": "початок збірки",
+                "сборка_завершена": "збірка завершена",
+                "выезд": "виїзд",
+                "маршрут_завершён": "завершення",
+            }
+            missing_str = ", ".join(missing_names.get(m, m) for m in missing)
+            return missing_str
+
+        return None
+
 
 # Синглтон
 sheets_manager = SheetsManager()

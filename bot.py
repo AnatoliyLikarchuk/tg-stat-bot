@@ -289,10 +289,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.warning(f"Не удалось поставить реакцию: {e}")
 
-        # Предупреждение: выезд без номера маршрута
+        # Проверка цепочки событий и предупреждения
+        tz = pytz.timezone(config.TIMEZONE)
+        today_str = datetime.now(tz).strftime("%d.%m.%Y")
         for event in events:
-            if event.event_type == "выезд" and not event.route_number and event.driver:
-                try:
+            try:
+                # Предупреждение: выезд без номера маршрута
+                if event.event_type == "выезд" and not event.route_number and event.driver:
                     warn_text = (
                         f"⚠️ {event.driver} — виїзд зафіксовано, "
                         f"але номер маршруту не вказано. Вкажіть номер маршруту."
@@ -302,27 +305,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         text=warn_text
                     )
                     logger.info(f"[WARN] Выезд без номера маршрута: {event.driver}")
-                except Exception as e:
-                    logger.warning(f"Не удалось отправить предупреждение: {e}")
 
-        # Проверяем несоответствие маршрутов: водитель закрыл не тот маршрут
-        tz = pytz.timezone(config.TIMEZONE)
-        today_str = datetime.now(tz).strftime("%d.%m.%Y")
-        for event in events:
-            if event.event_type == "маршрут_завершён" and event.driver and event.route_number:
-                try:
+                # Проверка несоответствия маршрутов: водитель закрыл не тот маршрут
+                route_mismatch = False
+                if event.event_type == "маршрут_завершён" and event.driver and event.route_number:
                     departed_route = sheets_manager.get_driver_departure_route(event.driver, today_str)
-                    if not departed_route:
-                        warn_text = (
-                            f"⚠️ Увага: {event.driver} завершив маршрут {event.route_number}, "
-                            f"але виїзд не зафіксовано. Вкажіть час виїзду."
-                        )
-                        await context.bot.send_message(
-                            chat_id=update.effective_chat.id,
-                            text=warn_text
-                        )
-                        logger.info(f"[WARN] Завершение без выезда: {event.driver} маршрут {event.route_number}")
-                    elif departed_route != event.route_number:
+                    if departed_route and departed_route != event.route_number:
+                        route_mismatch = True
                         warn_text = (
                             f"⚠️ Увага: {event.driver} виїхав на маршрут {departed_route}, "
                             f"але закрив маршрут {event.route_number}. Перевірте номер маршруту."
@@ -332,8 +321,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             text=warn_text
                         )
                         logger.info(f"[WARN] Несоответствие маршрутов: {event.driver} выехал {departed_route}, закрыл {event.route_number}")
-                except Exception as e:
-                    logger.warning(f"Ошибка проверки несоответствия маршрутов: {e}")
+
+                # Проверка цепочки: начало_сборки → сборка_завершена → выезд → маршрут_завершён
+                # Пропускаем если уже сработало несоответствие маршрутов (более информативно)
+                if event.route_number and not route_mismatch:
+                    missing = sheets_manager.check_chain_violation(
+                        event.event_type, event.route_number, today_str
+                    )
+                    if missing:
+                        driver_info = f" ({event.driver})" if event.driver else ""
+                        warn_text = (
+                            f"⚠️ Маршрут {event.route_number}{driver_info}: "
+                            f"зафіксовано «{event.event_type}», але не було: {missing}"
+                        )
+                        await context.bot.send_message(
+                            chat_id=update.effective_chat.id,
+                            text=warn_text
+                        )
+                        logger.info(f"[WARN] Нарушение цепочки: маршрут {event.route_number} — {event.event_type}, не хватает: {missing}")
+            except Exception as e:
+                logger.warning(f"Ошибка проверки цепочки событий: {e}")
 
         # Проверяем: если закрыли последний маршрут — уведомляем группу
         has_route_completed = any(e.event_type == "маршрут_завершён" for e in events)
