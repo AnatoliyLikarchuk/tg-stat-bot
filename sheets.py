@@ -31,6 +31,9 @@ class SheetsManager:
         self.client = None
         self.spreadsheet = None
         self.worksheet = None
+        self._cache = None        # кэш последнего чтения _get_recent_records
+        self._cache_ts = 0        # timestamp кэша
+        self._CACHE_TTL = 5       # TTL кэша в секундах
 
     def connect(self) -> bool:
         """Подключается к Google Sheets."""
@@ -93,7 +96,14 @@ class SheetsManager:
         Вместо get_all_records() который тянет ВСЕ строки (2000+),
         читаем только нужный диапазон. Для сегодняшних данных хватает ~200,
         для недельных ~500.
+
+        Результат кэшируется на 5 секунд, чтобы множественные проверки
+        (цепочка, несоответствие маршрутов) не дёргали API повторно.
         """
+        now = time.time()
+        if self._cache is not None and (now - self._cache_ts) < self._CACHE_TTL and max_rows <= 200:
+            return self._cache
+
         # +1 для заголовка
         data = self.worksheet.get(f'A1:H{max_rows + 1}')
         if not data or len(data) < 2:
@@ -105,7 +115,16 @@ class SheetsManager:
             # Дополняем короткие строки пустыми значениями
             padded = row + [''] * (len(headers) - len(row))
             records.append(dict(zip(headers, padded)))
+
+        if max_rows <= 200:
+            self._cache = records
+            self._cache_ts = now
+
         return records
+
+    def invalidate_cache(self):
+        """Сбрасывает кэш (вызывать после записи)."""
+        self._cache = None
 
     # HTTP-коды, при которых имеет смысл повторить запрос
     _RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
@@ -147,6 +166,7 @@ class SheetsManager:
                 # которой ARRAYFORMULA не может раскрыться — будет #REF!).
                 self.worksheet.update("A2", [['=ARRAYFORMULA(IF(B2:B="";"";ROW(B2:B)-1))']], value_input_option='USER_ENTERED')
                 self.worksheet.batch_clear(["A3"])
+                self.invalidate_cache()
                 if attempt > 0:
                     logger.info(f"Запись в таблицу удалась с попытки {attempt + 1}")
                 return True

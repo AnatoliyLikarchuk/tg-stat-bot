@@ -97,7 +97,7 @@ class MessageParser:
         "problem": r"не\s+доставив|не\s+вказано|завтра\s+(?:с\s+)?утра|час\s+прийому\s+не",
 
         # Поздняя доставка: "5 точек после 19"
-        "late_delivery": r"(\d+)\s+точ[е|о]к\s+после\s+(\d+)",
+        "late_delivery": r"(\d+)\s+точ[ео]к\s+после\s+(\d+)",
 
         # Номер маршрута (с учётом опечаток: марщрут, маршру)
         "route": r"(?:мар?[шщ]рут?|мршт)\s*(\d+)",
@@ -258,7 +258,15 @@ class MessageParser:
         if self.compiled["route_complete"].search(text_lower):
             routes_drivers = self._extract_routes_drivers(text)
             if routes_drivers:
+                # Исключаем маршруты, уже записанные как сборка_завершена —
+                # слово "завершена" в "сборка завершена" ложно триггерит route_complete
+                assembly_done_routes = {
+                    e.route_number for e in events
+                    if e.event_type == self.EVENT_ASSEMBLY_DONE
+                }
                 for route, driver in routes_drivers:
+                    if route in assembly_done_routes:
+                        continue
                     events.append(ParsedEvent(
                         event_type=self.EVENT_ROUTE_COMPLETE,
                         time=time_str,
@@ -314,7 +322,7 @@ class MessageParser:
         "собран", "собрана", "собрано",
         # Глаголы завершения (рус)
         "закончил", "закончила", "закончили", "закончив",
-        "завершил", "завершила", "завершили", "завершив",
+        "завершил", "завершила", "завершили",
         "завершен", "завершена", "завершено", "завершён",
         "закрыл", "закрыла", "закрыли",
         "развез", "развезла", "развезли", "развёз",

@@ -3,6 +3,7 @@
 Использует JobQueue из python-telegram-bot с поддержкой timezone.
 """
 
+import asyncio
 import logging
 from datetime import time
 import pytz
@@ -59,7 +60,6 @@ async def send_active_routes_report(context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Ошибка отчёта об активных маршрутах (попытка {attempt}/{max_retries}): {e}")
             if attempt < max_retries:
-                import asyncio
                 await asyncio.sleep(5)
 
 
@@ -80,18 +80,3 @@ def format_active_routes(routes: list) -> str:
         text += "\n"
 
     return text
-
-
-# Для обратной совместимости (на случай если где-то используется класс)
-class ReportScheduler:
-    """Устаревший класс. Используй setup_scheduler(application)."""
-
-    def __init__(self, bot):
-        logger.warning("ReportScheduler устарел. Используй setup_scheduler(application)")
-        self.bot = bot
-
-    def start(self):
-        pass
-
-    def stop(self):
-        pass
