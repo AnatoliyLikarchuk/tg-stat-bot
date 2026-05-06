@@ -17,6 +17,7 @@ class ParsedEvent:
     route_number: Optional[str]  # Номер маршрута
     driver: Optional[str]    # Имя водителя
     raw_text: str            # Исходный текст
+    mileage_km: Optional[int] = None  # Пробег в км (только для EVENT_MILEAGE)
 
 
 class MessageParser:
@@ -37,8 +38,26 @@ class MessageParser:
         # защита от автотранслитерации и→і
         "кияниця": "Кияниця",
         "косич": "Косич",
+        # Водители для учёта километража
+        "буркало": "Буркало",
+        "галунько": "Галунько",
+        "горбатко": "Горбатко",
+        "грабиченко": "Грабіченко",
+        "грабіченко": "Грабіченко",
+        "карпенко": "Карпенко",
+        "овчаренко": "Овчаренко",
+        "сергеев": "Сергеєв",
+        "сергєєв": "Сергеєв",
+        "сергеєв": "Сергеєв",
         # Добавляй новых водителей здесь:
         # "иванов": "Іванов",
+    }
+
+    # Список валидных водителей для учёта километража.
+    # Сообщение от водителя не из этого списка → молча игнорируется.
+    KNOWN_DRIVERS = {
+        "Буркало", "Галунько", "Горбатко", "Горобець", "Грабіченко",
+        "Карпенко", "Качаєнко", "Косич", "Овчаренко", "Роговський", "Сергеєв",
     }
 
     # Транслитерация рус → укр (для автоматической нормализации)
@@ -71,6 +90,7 @@ class MessageParser:
     EVENT_ALL_DEPARTED = "все_выехали"
     EVENT_PROBLEM = "проблема"
     EVENT_LATE_DELIVERY = "поздняя_доставка"
+    EVENT_MILEAGE = "пробег"
 
     # Regex паттерны
     PATTERNS = {
@@ -109,6 +129,11 @@ class MessageParser:
 
         # Имя водителя (после номера маршрута)
         "driver": r"(?:мар?[шщ]рут?|мршт)\s*\d+\s+([А-ЯІЇЄҐа-яіїєґA-Za-z]+)",
+
+        # Пробег: "Косич 120 км", "Косич за сегодня 120 км", "Косич - 120км",
+        # "Косич проехав 120 км". Граница слова после "км" отсекает "километров".
+        # Допускает 0-2 слов между именем и числом (под "за сегодня", "проехав", "сегодня").
+        "mileage": r"([А-ЯІЇЄҐЁ][а-яіїєґё']+)[\s,\-—–]*(?:[а-яіїєґё]+\s+){0,2}(\d{1,4})\s*км\b",
     }
 
     def __init__(self):
@@ -175,6 +200,25 @@ class MessageParser:
         if time_match:
             hours, minutes = time_match.groups()
             time_str = f"{int(hours):02d}:{minutes}"
+
+        # Пробег: "Косич 120 км" и варианты. Если матч есть и имя из списка
+        # известных водителей — это пробег, не пускаем дальше (слово "км"
+        # не должно ложно срабатывать на других паттернах).
+        # Если имя не из списка — игнорируем молча.
+        mileage_match = self.compiled["mileage"].search(text)
+        if mileage_match:
+            raw_name, km_str = mileage_match.groups()
+            name = self.normalize_driver_name(raw_name)
+            if name in self.KNOWN_DRIVERS:
+                events.append(ParsedEvent(
+                    event_type=self.EVENT_MILEAGE,
+                    time=None,
+                    route_number=None,
+                    driver=name,
+                    raw_text=text,
+                    mileage_km=int(km_str),
+                ))
+                return events
 
         # Проверяем типы событий
         if self.compiled["all_departed"].search(text_lower):

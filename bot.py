@@ -6,7 +6,7 @@ Telegram-бот для сбора статистики логистики.
 import asyncio
 import logging
 import time as time_module
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReactionTypeEmoji
 from telegram.ext import (
@@ -21,10 +21,19 @@ from telegram.ext import (
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton("📊 Статистика сегодня"), KeyboardButton("📈 За неделю")],
-        [KeyboardButton("🚗 Активные маршруты"), KeyboardButton("❓ Помощь")]
+        [KeyboardButton("🚗 Активные маршруты"), KeyboardButton("❓ Помощь")],
+        [KeyboardButton("📏 Километраж за неделю")],
     ],
     resize_keyboard=True
 )
+
+BUTTON_LABELS = {
+    "📊 Статистика сегодня",
+    "📈 За неделю",
+    "🚗 Активные маршруты",
+    "❓ Помощь",
+    "📏 Километраж за неделю",
+}
 
 from config import config
 from parser import MessageParser
@@ -178,6 +187,28 @@ def format_stats(stats: dict, period: str) -> str:
     return text
 
 
+async def mileage_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Километраж по водителям за последние 7 дней."""
+    if not check_access(update):
+        await access_denied(update)
+        return
+    rows = sheets_manager.get_weekly_mileage()
+
+    if not rows:
+        await update.message.reply_text("📏 За последние 7 дней пробег не записан.")
+        return
+
+    today = datetime.now(pytz.timezone(config.TIMEZONE)).date()
+    start = today - timedelta(days=6)
+    text = f"📏 Километраж {start:%d.%m}—{today:%d.%m}\n\n"
+    total = 0
+    for r in rows:
+        text += f"  • {r['driver']}: {r['km']} км\n"
+        total += r["km"]
+    text += f"\nИтого: {total} км"
+    await update.message.reply_text(text)
+
+
 async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик нажатий на кнопки."""
     if not check_access(update):
@@ -193,6 +224,8 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await active_routes(update, context)
     elif text == "❓ Помощь":
         await help_command(update, context)
+    elif text == "📏 Километраж за неделю":
+        await mileage_week(update, context)
 
 
 async def handle_private_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -226,7 +259,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"[DEBUG] Получено{edit_tag}{caption_tag}: '{text[:100]}' от {update.effective_user.first_name if update.effective_user else 'unknown'}")
 
     # Игнорируем кнопки в группах
-    if text in ["📊 Статистика сегодня", "📈 За неделю", "🚗 Активные маршруты", "❓ Помощь"]:
+    if text in BUTTON_LABELS:
         return
 
     events = parser.parse(text)
@@ -273,8 +306,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Сохраняем события по одному — чтобы откатить дедуп для тех,
     # которые не записались (тогда следующая копия сообщения сможет повторить запись)
     saved = 0
+    tz = pytz.timezone(config.TIMEZONE)
     for event, key in zip(events, event_keys):
-        if sheets_manager.add_event(event, group_name):
+        if event.event_type == parser.EVENT_MILEAGE:
+            ok = sheets_manager.upsert_mileage(
+                event.driver, event.mileage_km, datetime.now(tz)
+            )
+        else:
+            ok = sheets_manager.add_event(event, group_name)
+
+        if ok:
             saved += 1
         else:
             # Запись не удалась — убираем из дедупа, чтобы retry-копия прошла
@@ -400,7 +441,7 @@ def main():
     # Обработчик кнопок в личных сообщениях
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE &
-        filters.Regex(r"^(📊 Статистика сегодня|📈 За неделю|🚗 Активные маршруты|❓ Помощь)$"),
+        filters.Regex(r"^(📊 Статистика сегодня|📈 За неделю|🚗 Активные маршруты|❓ Помощь|📏 Километраж за неделю)$"),
         handle_buttons
     ))
 
