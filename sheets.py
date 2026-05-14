@@ -166,10 +166,33 @@ class SheetsManager:
         msg = str(exc).lower()
         return any(s in msg for s in ("unavailable", "timeout", "timed out", "connection"))
 
+    def _with_retry(self, op_name: str, fn):
+        """Выполняет fn() с retry+backoff при временных ошибках Google API.
+
+        При нерет­райной ошибке (или исчерпании попыток) — ре-рейзит исключение.
+        Вызывающий код решает, что делать (вернуть False, залогировать и т.п.).
+        """
+        for attempt in range(len(self._RETRY_DELAYS) + 1):
+            try:
+                result = fn()
+                if attempt > 0:
+                    logger.info(f"{op_name}: успех с попытки {attempt + 1}")
+                return result
+            except Exception as e:
+                if attempt < len(self._RETRY_DELAYS) and self._is_transient_error(e):
+                    delay = self._RETRY_DELAYS[attempt]
+                    logger.warning(
+                        f"{op_name}: временная ошибка ({e}), retry через {delay}с"
+                        f" (попытка {attempt + 2}/{len(self._RETRY_DELAYS) + 1})"
+                    )
+                    time.sleep(delay)
+                    continue
+                raise
+
     def add_event(self, event: ParsedEvent, group_name: str = "") -> bool:
         """Добавляет событие в таблицу (вставляет сверху, сразу после заголовка).
 
-        При временных ошибках Google API (503/429/таймауты) делает retry с backoff.
+        При временных ошибках Google API (503/429/таймауты/обрывы) делает retry с backoff.
         """
         row = [
             "",  # A - автонумерация формулой
@@ -182,31 +205,22 @@ class SheetsManager:
             group_name
         ]
 
-        last_error: Optional[Exception] = None
-        for attempt in range(len(self._RETRY_DELAYS) + 1):
-            try:
-                # Вставляем новую строку сразу после заголовка (позиция 2)
-                self.worksheet.insert_row(row, index=2)
-                # insert_row сдвигает формулу из A2 в A3. Восстанавливаем в A2
-                # и ПОЛНОСТЬЮ очищаем A3 (запись '' оставила бы пустую строку, из-за
-                # которой ARRAYFORMULA не может раскрыться — будет #REF!).
-                self.worksheet.update("A2", [['=ARRAYFORMULA(IF(B2:B="";"";ROW(B2:B)-1))']], value_input_option='USER_ENTERED')
-                self.worksheet.batch_clear(["A3"])
-                self.invalidate_cache()
-                if attempt > 0:
-                    logger.info(f"Запись в таблицу удалась с попытки {attempt + 1}")
-                return True
-            except Exception as e:
-                last_error = e
-                if attempt < len(self._RETRY_DELAYS) and self._is_transient_error(e):
-                    delay = self._RETRY_DELAYS[attempt]
-                    logger.warning(f"Временная ошибка Sheets ({e}), retry через {delay}с (попытка {attempt + 2})")
-                    time.sleep(delay)
-                    continue
-                break
+        def _do():
+            # Вставляем новую строку сразу после заголовка (позиция 2)
+            self.worksheet.insert_row(row, index=2)
+            # insert_row сдвигает формулу из A2 в A3. Восстанавливаем в A2
+            # и ПОЛНОСТЬЮ очищаем A3 (запись '' оставила бы пустую строку, из-за
+            # которой ARRAYFORMULA не может раскрыться — будет #REF!).
+            self.worksheet.update("A2", [['=ARRAYFORMULA(IF(B2:B="";"";ROW(B2:B)-1))']], value_input_option='USER_ENTERED')
+            self.worksheet.batch_clear(["A3"])
+            self.invalidate_cache()
+            return True
 
-        logger.error(f"Ошибка записи в таблицу: {last_error}")
-        return False
+        try:
+            return self._with_retry("Запись события", _do)
+        except Exception as e:
+            logger.error(f"Ошибка записи в таблицу: {e}")
+            return False
 
     def add_events(self, events: List[ParsedEvent], group_name: str = "") -> int:
         """Добавляет несколько событий. Возвращает количество успешных записей."""
@@ -478,6 +492,10 @@ class SheetsManager:
         Если колонки дня нет — вставляет (свежий день слева в блоке месяца).
         Если блока месяца нет совсем — создаёт новый блок (3 колонки) слева.
         Перезаписывает значение если колонка дня уже существует.
+
+        При временных ошибках Google API делает retry с backoff. Ретрай безопасен:
+        при повторе перечитываем верхние 3 строки и решаем заново — если первый
+        batch_update успел применится, увидим колонку и просто обновим ячейку.
         """
         if self.mileage_sheet is None:
             logger.warning("Лист пробега не подключён — пропускаем запись")
@@ -485,69 +503,75 @@ class SheetsManager:
 
         with self._mileage_lock:
             try:
-                month_label = f"M{dt:%Y-%m}"
-                day_label = dt.strftime("%d.%m.%y")
-                month_title = f"{self.MONTH_NAMES_RU[dt.month]} {dt.year}"
-
-                driver_rows = self._get_driver_rows()
-                driver_row = driver_rows.get(driver)
-                if driver_row is None:
-                    logger.warning(f"Водитель '{driver}' отсутствует в листе пробега")
-                    return False
-
-                # Читаем верхние 3 строки одним запросом
-                top = self.mileage_sheet.get_values('A1:ZZ3')
-                row1 = (top[0] if len(top) > 0 else []) + [''] * 200
-                row2 = (top[1] if len(top) > 1 else []) + [''] * 200
-                row3 = (top[2] if len(top) > 2 else []) + [''] * 200
-
-                # Колонки дней этого месяца (с меткой M{YYYY-MM})
-                day_columns_of_month = [i for i, v in enumerate(row1) if v == month_label]
-
-                if day_columns_of_month:
-                    # Блок месяца с днями есть — ищем конкретный день
-                    matching = [i for i in day_columns_of_month if row3[i] == day_label]
-                    if matching:
-                        col_1_based = matching[0] + 1
-                        self.mileage_sheet.update_cell(driver_row, col_1_based, km)
-                        logger.info(f"[пробег] {driver} {day_label}: {km} км (перезапись)")
-                        return True
-
-                    # Найти границы текущего объединения шапки месяца
-                    if month_title in row2:
-                        title_idx = row2.index(month_title)
-                    else:
-                        title_idx = day_columns_of_month[0] - 2  # расчётные слева
-                    last_col = max(day_columns_of_month)
-                    insert_at = day_columns_of_month[0]  # свежий слева
-                    self._extend_month_block(
-                        title_idx, last_col, insert_at,
-                        month_label, day_label, driver_row, km,
-                    )
-                    logger.info(f"[пробег] {driver} {day_label}: {km} км (новый день)")
-                    return True
-
-                # Колонок-дней нет. Проверяем — есть ли уже расчётные блока (заголовок месяца)
-                if month_title in row2:
-                    title_idx = row2.index(month_title)
-                    # Расчётные занимают title_idx и title_idx+1, день вставляем после
-                    last_col = title_idx + 1
-                    insert_at = title_idx + 2
-                    self._extend_month_block(
-                        title_idx, last_col, insert_at,
-                        month_label, day_label, driver_row, km,
-                    )
-                    logger.info(f"[пробег] {driver} {day_label}: {km} км (первый день месяца)")
-                    return True
-
-                # Совсем новый месяц — создаём блок из 3 колонок слева от существующих
-                self._create_month_block(month_label, month_title, day_label, driver_row, km)
-                logger.info(f"[пробег] {driver} {day_label}: {km} км (новый месяц)")
-                return True
-
+                return self._with_retry(
+                    f"Пробег {driver}",
+                    lambda: self._upsert_mileage_impl(driver, km, dt),
+                )
             except Exception as e:
                 logger.error(f"Ошибка записи пробега для {driver}: {e}", exc_info=True)
                 return False
+
+    def _upsert_mileage_impl(self, driver: str, km: int, dt: datetime) -> bool:
+        """Реализация upsert_mileage без try/except — оборачивается в _with_retry."""
+        month_label = f"M{dt:%Y-%m}"
+        day_label = dt.strftime("%d.%m.%y")
+        month_title = f"{self.MONTH_NAMES_RU[dt.month]} {dt.year}"
+
+        driver_rows = self._get_driver_rows()
+        driver_row = driver_rows.get(driver)
+        if driver_row is None:
+            logger.warning(f"Водитель '{driver}' отсутствует в листе пробега")
+            return False
+
+        # Читаем верхние 3 строки одним запросом
+        top = self.mileage_sheet.get_values('A1:ZZ3')
+        row1 = (top[0] if len(top) > 0 else []) + [''] * 200
+        row2 = (top[1] if len(top) > 1 else []) + [''] * 200
+        row3 = (top[2] if len(top) > 2 else []) + [''] * 200
+
+        # Колонки дней этого месяца (с меткой M{YYYY-MM})
+        day_columns_of_month = [i for i, v in enumerate(row1) if v == month_label]
+
+        if day_columns_of_month:
+            # Блок месяца с днями есть — ищем конкретный день
+            matching = [i for i in day_columns_of_month if row3[i] == day_label]
+            if matching:
+                col_1_based = matching[0] + 1
+                self.mileage_sheet.update_cell(driver_row, col_1_based, km)
+                logger.info(f"[пробег] {driver} {day_label}: {km} км (перезапись)")
+                return True
+
+            # Найти границы текущего объединения шапки месяца
+            if month_title in row2:
+                title_idx = row2.index(month_title)
+            else:
+                title_idx = day_columns_of_month[0] - 2  # расчётные слева
+            last_col = max(day_columns_of_month)
+            insert_at = day_columns_of_month[0]  # свежий слева
+            self._extend_month_block(
+                title_idx, last_col, insert_at,
+                month_label, day_label, driver_row, km,
+            )
+            logger.info(f"[пробег] {driver} {day_label}: {km} км (новый день)")
+            return True
+
+        # Колонок-дней нет. Проверяем — есть ли уже расчётные блока (заголовок месяца)
+        if month_title in row2:
+            title_idx = row2.index(month_title)
+            # Расчётные занимают title_idx и title_idx+1, день вставляем после
+            last_col = title_idx + 1
+            insert_at = title_idx + 2
+            self._extend_month_block(
+                title_idx, last_col, insert_at,
+                month_label, day_label, driver_row, km,
+            )
+            logger.info(f"[пробег] {driver} {day_label}: {km} км (первый день месяца)")
+            return True
+
+        # Совсем новый месяц — создаём блок из 3 колонок слева от существующих
+        self._create_month_block(month_label, month_title, day_label, driver_row, km)
+        logger.info(f"[пробег] {driver} {day_label}: {km} км (новый месяц)")
+        return True
 
     def _extend_month_block(self, title_idx: int, last_col: int, insert_at: int,
                             month_label: str, day_label: str, driver_row: int, km: int):
