@@ -351,13 +351,19 @@ class SheetsManager:
                 if status in self.CLOSED_STATUSES:
                     closed_routes.add(route)
 
-                # Берём первую (верхнюю) запись для отображения
-                if route not in routes_info:
+                # Для отображения берём самый продвинутый шаг цепочки.
+                # Порядок строк в таблице не всегда хронологический (выезд
+                # может быть записан раньше завершения сборки), поэтому
+                # верхнюю строку брать нельзя — статус будет неточным.
+                rank = self.EVENT_CHAIN.index(status) if status in self.EVENT_CHAIN else -1
+                prev = routes_info.get(route)
+                if prev is None or rank > prev["_rank"]:
                     routes_info[route] = {
                         "route": route,
                         "driver": record.get("Водитель", ""),
                         "status": record.get("Событие", ""),
-                        "time": record.get("Время", "")
+                        "time": record.get("Время", ""),
+                        "_rank": rank,
                     }
 
             # Фильтруем: активные = есть записи, но НЕТ завершения
@@ -365,6 +371,9 @@ class SheetsManager:
                 r for route, r in routes_info.items()
                 if route not in closed_routes
             ]
+            # Убираем служебный ключ сортировки
+            for r in active:
+                del r["_rank"]
 
             return active
 
