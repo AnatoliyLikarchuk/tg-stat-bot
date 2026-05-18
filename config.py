@@ -51,14 +51,13 @@ class Config:
     # Часовой пояс
     TIMEZONE: str = os.getenv("TIMEZONE", "Europe/Kiev")
 
-    # Белый список пользователей (Telegram user_id через запятую)
-    # Дефолтные разрешённые пользователи (если ALLOWED_USERS не задан)
-    _DEFAULT_ALLOWED_USERS: set = {148941669, 8386112275}
-
-    ALLOWED_USERS: set = _DEFAULT_ALLOWED_USERS.copy()
+    # Белый список пользователей (Telegram user_id через запятую).
+    # Читается только из .env. Пусто → set() → личные команды и кнопки
+    # бота недоступны всем (парсинг сообщений в группах не затрагивается).
     _allowed_users_str = os.getenv("ALLOWED_USERS", "")
-    if _allowed_users_str:
-        ALLOWED_USERS = {int(uid.strip()) for uid in _allowed_users_str.split(",") if uid.strip()}
+    ALLOWED_USERS: set = {
+        int(uid.strip()) for uid in _allowed_users_str.split(",") if uid.strip()
+    }
 
     @classmethod
     def is_user_allowed(cls, user_id: int) -> bool:
