@@ -336,6 +336,74 @@ class SheetsManager:
                 logger.error(f"Ошибка чистки листа '{city}': {e}")
         return total_removed
 
+    def backfill_mileage_formulas(self) -> int:
+        """Проставляет формулы «Пробег км»/«Расход топл» всем водителям
+        во всех существующих блоках месяцев листа «Пробіг».
+
+        Идемпотентна: ячейки, где формула уже есть, не трогает.
+        Возвращает количество заполненных строк-формул.
+        """
+        if self.mileage_sheet is None:
+            logger.warning("Лист пробега не подключён — backfill пропущен")
+            return 0
+
+        with self._mileage_lock:
+            try:
+                grid = self.mileage_sheet.get_values(
+                    "A1:ZZ300", value_render_option="FORMULA"
+                )
+                if len(grid) < 4:
+                    return 0
+
+                row1 = (grid[0] if len(grid) > 0 else []) + [""] * 300
+                row3 = (grid[2] if len(grid) > 2 else []) + [""] * 300
+                blocks = core.find_mileage_blocks(row1, row3)
+                if not blocks:
+                    logger.info("backfill: блоков месяцев нет")
+                    return 0
+
+                driver_rows = sorted(self._get_driver_rows().values())
+                sheet_id = self.mileage_sheet_id
+                requests = []
+                for row_1based in driver_rows:
+                    row_idx0 = row_1based - 1
+                    existing = grid[row_idx0] if row_idx0 < len(grid) else []
+                    for mcol, month_label in blocks:
+                        current = existing[mcol] if mcol < len(existing) else ""
+                        if str(current).strip():
+                            continue  # формула/значение уже есть
+                        mileage_formula = (
+                            f"=SUMIFS(${row_1based}:${row_1based};"
+                            f'$1:$1;"{month_label}")'
+                        )
+                        fuel_formula = (
+                            "=" + self._col_letter(mcol + 1) + str(row_1based)
+                            + "/100*C" + str(row_1based)
+                        )
+                        requests.append({"updateCells": {
+                            "range": {"sheetId": sheet_id,
+                                      "startRowIndex": row_idx0,
+                                      "endRowIndex": row_1based,
+                                      "startColumnIndex": mcol,
+                                      "endColumnIndex": mcol + 2},
+                            "rows": [{"values": [
+                                {"userEnteredValue": {"formulaValue": mileage_formula}},
+                                {"userEnteredValue": {"formulaValue": fuel_formula}},
+                            ]}],
+                            "fields": "userEnteredValue",
+                        }})
+
+                if not requests:
+                    logger.info("backfill: все формулы уже на месте")
+                    return 0
+
+                self.spreadsheet.batch_update({"requests": requests})
+                logger.info(f"backfill: заполнено {len(requests)} строк-формул")
+                return len(requests)
+            except Exception as e:
+                logger.error(f"Ошибка backfill формул пробега: {e}", exc_info=True)
+                return 0
+
     # ==================== Учёт километража (лист "Пробіг") ====================
 
     # Цвета (0..1) для форматирования блоков месяца

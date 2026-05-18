@@ -158,6 +158,23 @@ def compute_active_routes(records: list, today_str: str) -> list:
     return active
 
 
+def find_mileage_blocks(row1: list, row3: list) -> list:
+    """Находит блоки месяцев на листе «Пробіг».
+
+    row1 — строка меток (M{YYYY-MM} над колонками дней),
+    row3 — строка заголовков («Пробег км», «Расход топл», дни).
+    Возвращает [(индекс_колонки_«Пробег км», метка_месяца), ...].
+    """
+    blocks = []
+    for i, header in enumerate(row3):
+        if header != "Пробег км":
+            continue
+        label = row1[i + 2] if i + 2 < len(row1) else ""
+        if isinstance(label, str) and label.startswith("M"):
+            blocks.append((i, label))
+    return blocks
+
+
 def sanitize_sheet_name(title: str, fallback: str) -> str:
     """Название Telegram-чата → корректное имя листа Google Sheets.
 

@@ -1,6 +1,6 @@
 import core
 from datetime import date
-from core import sanitize_sheet_name, compute_active_routes, compute_stats, compute_chain_violation, count_stale_rows, paginate
+from core import sanitize_sheet_name, compute_active_routes, compute_stats, compute_chain_violation, count_stale_rows, paginate, find_mileage_blocks
 
 
 def test_module_imports():
@@ -176,3 +176,23 @@ def test_sanitize_reserved_name_returns_fallback():
 
 def test_sanitize_strips_apostrophes():
     assert sanitize_sheet_name("'Суми'", "fb") == "Суми"
+
+
+def test_find_blocks_single():
+    row1 = ["", "", "", "Расчёт", "Расчёт", "M2026-05", "M2026-05"]
+    row3 = ["№", "Водитель", "Плановый расход", "Пробег км", "Расход топл",
+            "16.05.26", "15.05.26"]
+    assert find_mileage_blocks(row1, row3) == [(3, "M2026-05")]
+
+
+def test_find_blocks_two_months():
+    # Свежий блок слева (Июнь), старый справа (Май)
+    row1 = ["", "", "", "Расчёт", "Расчёт", "M2026-06",
+            "Расчёт", "Расчёт", "M2026-05", "M2026-05"]
+    row3 = ["№", "Водитель", "Плановый расход", "Пробег км", "Расход топл",
+            "01.06.26", "Пробег км", "Расход топл", "16.05.26", "15.05.26"]
+    assert find_mileage_blocks(row1, row3) == [(3, "M2026-06"), (6, "M2026-05")]
+
+
+def test_find_blocks_none():
+    assert find_mileage_blocks(["", ""], ["№", "Водитель"]) == []

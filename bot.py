@@ -144,6 +144,16 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def backfill_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Одноразовая команда: досоздать формулы пробега всем водителям."""
+    if not check_access(update):
+        await access_denied(update)
+        return
+    await update.message.reply_text("⏳ Заповнюю формули пробігу...")
+    count = sheets_manager.backfill_mileage_formulas()
+    await update.message.reply_text(f"✅ Готово. Заповнено формул: {count}")
+
+
 def format_stats(stats: dict, period: str) -> str:
     """Форматирует статистику для вывода."""
     text = f"📊 Статистика за {period}\n\n"
@@ -485,6 +495,7 @@ def main():
 
     # Регистрируем обработчик /start
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("backfill", backfill_command))
     app.add_handler(CallbackQueryHandler(on_city_callback))
 
     # Обработчик кнопок в личных сообщениях
