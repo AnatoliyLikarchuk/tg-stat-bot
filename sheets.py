@@ -30,7 +30,7 @@ class SheetsManager:
 
     # Лист пробега водителей. См. формат в /Users/anatoliy/.claude/plans/1-jiggly-treehouse.md
     MILEAGE_SHEET_NAME = "Пробіг"
-    MILEAGE_DRIVER_ROWS_RANGE = "B4:B100"  # колонка с именами водителей
+    MILEAGE_DRIVER_ROWS_RANGE = "B4:B300"  # имена водителей (блоки по городам)
     _MILEAGE_DRIVERS_TTL = 3600  # TTL кэша списка водителей
 
     MONTH_NAMES_RU = {
@@ -555,16 +555,18 @@ class SheetsManager:
         # Вставка перед колонкой D (index=3) — сразу после "Расход план"
         ins = 3
 
-        # Формулы для всех водителей (строки 4..14)
-        # Используем абсолютную ссылку на полную строку — формула инвариантна
-        # к вставкам колонок справа, и SUMIFS отбирает по метке в строке 1.
+        # Формулы для всех строк, где реально есть водитель (а не 4..14).
+        # SUMIFS по полной строке инвариантен к вставке колонок справа.
+        driver_rows = sorted(self._get_driver_rows().values())
         formula_requests = []
-        for row_1_based in range(4, 15):
-            mileage_formula = f'=SUMIFS(${row_1_based}:${row_1_based};$1:$1;"{month_label}")'
-            fuel_formula = (f'=' + self._col_letter(ins + 1) + str(row_1_based)
-                            + '/100*' + self._col_letter(3) + str(row_1_based))
-            # ins+1 это колонка D (1-based) после вставки → "Пробег км"
-            # колонка C (3 1-based) — Расход план
+        for row_1_based in driver_rows:
+            mileage_formula = (
+                f'=SUMIFS(${row_1_based}:${row_1_based};$1:$1;"{month_label}")'
+            )
+            fuel_formula = (
+                "=" + self._col_letter(ins + 1) + str(row_1_based)
+                + "/100*" + self._col_letter(3) + str(row_1_based)
+            )
             formula_requests.append({"updateCells": {
                 "range": {"sheetId": sheet_id,
                           "startRowIndex": row_1_based - 1, "endRowIndex": row_1_based,
@@ -722,19 +724,18 @@ class SheetsManager:
             today = datetime.now(TZ).date()
             week_start = today - timedelta(days=6)
 
-            data = self.mileage_sheet.get_values('A1:ZZ14')
-            if len(data) < 14:
+            data = self.mileage_sheet.get_values("A1:ZZ300")
+            if len(data) < 4:
                 return []
 
-            row1 = data[0] + [''] * 200
-            row3 = data[2] + [''] * 200
+            row1 = data[0] + [""] * 200
+            row3 = data[2] + [""] * 200
 
-            # Колонки внутри окна [week_start, today]
             window_cols = []
             for i, label in enumerate(row1):
                 if not label or not label.startswith("M"):
                     continue
-                date_str = row3[i] if i < len(row3) else ''
+                date_str = row3[i] if i < len(row3) else ""
                 if not date_str:
                     continue
                 try:
@@ -747,21 +748,17 @@ class SheetsManager:
             if not window_cols:
                 return []
 
-            # Имена водителей и значения за выбранные колонки
             results = []
-            for row_idx in range(3, 14):  # строки 4-14 (0-based 3-13)
-                if row_idx >= len(data):
-                    break
-                row = data[row_idx] + [''] * 200
-                name = (row[1] or '').strip()  # колонка B
+            for row_idx in range(3, len(data)):  # строки с 4-й до конца
+                row = data[row_idx] + [""] * 200
+                name = (row[1] or "").strip()  # колонка B
                 if not name:
-                    continue
+                    continue  # строка-подзаголовок города или пустая
                 total = 0
                 for c in window_cols:
-                    val = row[c] if c < len(row) else ''
+                    val = row[c] if c < len(row) else ""
                     try:
-                        # gspread может вернуть строку с запятой как разделителем
-                        total += int(float(str(val).replace(',', '.'))) if val else 0
+                        total += int(float(str(val).replace(",", "."))) if val else 0
                     except (ValueError, TypeError):
                         continue
                 if total > 0:
