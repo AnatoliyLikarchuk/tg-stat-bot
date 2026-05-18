@@ -7,10 +7,8 @@
 import unicodedata
 from datetime import datetime
 
-# Запрещённые символы в имени листа Google Sheets: []:*?/\
-# Скобки заменяются на пробел, остальное удаляется
-_CHARS_TO_REPLACE = set("[]")
-_CHARS_TO_DELETE = set(":*?/\\")
+# Запрещённые символы в имени листа Google Sheets
+_FORBIDDEN_SHEET_CHARS = set("[]:*?/\\")
 
 # Служебные имена листов, которые нельзя занимать под город
 RESERVED_SHEET_NAMES = {"Пробіг"}
@@ -168,13 +166,7 @@ def sanitize_sheet_name(title: str, fallback: str) -> str:
     имя → fallback (обычно строковый chat_id).
     """
     name = (title or "").strip()
-    result = []
-    for ch in name:
-        if ch in _CHARS_TO_REPLACE:
-            result.append(" ")
-        elif ch not in _CHARS_TO_DELETE:
-            result.append(ch)
-    name = "".join(result)
+    name = "".join(" " if ch in _FORBIDDEN_SHEET_CHARS else ch for ch in name)
     name = name.strip("'").strip()
     name = name[:100].strip()
     if not name or name in RESERVED_SHEET_NAMES:

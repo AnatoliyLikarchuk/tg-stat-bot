@@ -157,7 +157,7 @@ def test_sanitize_keeps_normal_name():
 
 def test_sanitize_strips_forbidden_chars():
     # []:*?/\ запрещены в именах листов Google Sheets
-    assert sanitize_sheet_name("Суми [2]/гілка", "fb") == "Суми  2 гілка"
+    assert sanitize_sheet_name("Суми [2]/гілка", "fb") == "Суми  2  гілка"
 
 
 def test_sanitize_trims_to_100_chars():
