@@ -1734,13 +1734,98 @@ git commit -m "📝 Доки: поддержка нескольких город
 
 ---
 
+## Phase H — Поэтапный запуск
+
+### Task 17: Города только для пробега (`FULL_STATS_CHAT_IDS`)
+
+**Цель:** Поэтапный запуск бота по городам. Для нового города бот сначала читает только пробег (в общий лист «Пробіг»), а статистику событий маршрутов (сборка/выезд/завершение, отдельный лист города) ведёт только для явно перечисленных чатов. Когда город «готов» к полной статистике — его chat_id добавляется в `FULL_STATS_CHAT_IDS`.
+
+**Files:**
+- Modify: `config.py` — `FULL_STATS_CHAT_IDS` + `is_full_stats_chat`
+- Modify: `.env.example`
+- Modify: `bot.py` — `handle_message`
+
+**Контекст:** Пробег (`upsert_mileage`) уже город-независим — пишет в общий лист «Пробіг» по имени водителя. Менять надо только запись событий маршрутов: `add_event` для не-перечисленных чатов не вызывать, лист города для них не создавать, проверки цепочки и уведомление о завершении — пропускать.
+
+- [ ] **Step 1: Добавить `FULL_STATS_CHAT_IDS` и `is_full_stats_chat` в `config.py`**
+
+После блока с `RETENTION_DAYS`/`CLEANUP_TIME` добавить:
+```python
+    # Чаты с полной статистикой событий маршрутов (chat_id через запятую).
+    # Если задан — события сборки/выезда/завершения пишутся в лист города
+    # только для этих чатов; для остальных бот ведёт только пробег.
+    # Пусто — полная статистика для всех чатов (обратная совместимость).
+    _full_stats_raw = os.getenv("FULL_STATS_CHAT_IDS", "")
+    FULL_STATS_CHAT_IDS: list = [
+        c.strip() for c in _full_stats_raw.split(",") if c.strip()
+    ]
+```
+
+Рядом с методом `is_user_allowed` добавить classmethod:
+```python
+    @classmethod
+    def is_full_stats_chat(cls, chat_id) -> bool:
+        """Вести ли полную статистику событий маршрутов для чата.
+
+        Пустой FULL_STATS_CHAT_IDS → True для всех (обратная совместимость).
+        """
+        if not cls.FULL_STATS_CHAT_IDS:
+            return True
+        return str(chat_id) in cls.FULL_STATS_CHAT_IDS
+```
+
+- [ ] **Step 2: Обновить `.env.example`**
+
+После строк `RETENTION_DAYS`/`CLEANUP_TIME` добавить:
+```
+# Чаты с полной статистикой маршрутов (chat_id через запятую).
+# Пусто = полная статистика для всех. Для поэтапного запуска укажи
+# только готовые города; остальные чаты ведут только пробег.
+FULL_STATS_CHAT_IDS=
+```
+
+- [ ] **Step 3: Развилка в `handle_message` (`bot.py`)**
+
+В `handle_message` после вычисления `chat_id` (он уже считается для дедупликации: `chat_id = update.effective_chat.id if update.effective_chat else 0`) определить флаг:
+```python
+    full_stats = config.is_full_stats_chat(chat_id)
+```
+
+В цикле сохранения событий заменить ветку записи события так, чтобы не-mileage событие писалось только при `full_stats`:
+```python
+        if event.event_type == parser.EVENT_MILEAGE:
+            ok = sheets_manager.upsert_mileage(
+                event.driver, event.mileage_km, datetime.now(tz)
+            )
+        elif full_stats:
+            ok = sheets_manager.add_event(event, city, group_name)
+        else:
+            continue  # mileage-only чат — события маршрутов не пишем
+```
+
+Блок «Проверка цепочки событий и предупреждения» (цикл `for event in events` с `check_chain_violation`/`get_driver_departure_route`) и блок «Закрыли последний маршрут города — уведомляем» выполнять только при `full_stats` — обернуть оба в `if full_stats:`. Реакцию 🏆 (`msg.set_reaction`) оставить как есть — она уместна и для записанного пробега.
+
+- [ ] **Step 4: Проверка**
+
+Run: `python3 -m pytest tests/ -q && python3 -c "import bot, config; print('ok')"`
+Expected: тесты PASS, `ok`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add config.py bot.py .env.example
+git commit -m "✨ FULL_STATS_CHAT_IDS — поэтапный запуск (mileage-only города)"
+```
+
+---
+
 ## Развёртывание (после слияния)
 
 Перед `git push` в `main` (CI задеплоит автоматически) — вручную на сервере:
 
 1. **Создать лист «Пробіг» первой вкладкой** (если ещё не первая) — переместить.
-2. **Перенести текущие данные**: существующий Лист1 переименовать в название чата Сум (точно как Telegram-title) — он станет листом города.
-3. **Заполнить `.env` на сервере**: `REPORT_CHAT_IDS` (бывший `REPORT_CHAT_ID` подхватится автоматически).
+2. **Перенести текущие данные**: существующий Лист1 переименовать в название чата Киева (точно как Telegram-title) — он станет листом города.
+3. **Заполнить `.env` на сервере**: `REPORT_CHAT_IDS` (бывший `REPORT_CHAT_ID` подхватится автоматически). Для поэтапного запуска — `FULL_STATS_CHAT_IDS` (chat_id Киева): новые города при этом ведут только пробег, пока их chat_id не добавлен в этот список.
 4. **Лист «Пробіг»**: расставить подзаголовки городов в колонке A, водителей — в колонку B блоками, норму расхода — в колонку C. Затем отправить боту команду `/backfill` — она проставит формулы «Пробег км»/«Расход топл» всем водителям во всех существующих блоках месяцев.
 
 ---
@@ -1754,6 +1839,7 @@ git commit -m "📝 Доки: поддержка нескольких город
 - ✅ Чистка >90 дней — Task 6, 11, 12
 - ✅ «Пробіг» общий, блоки по городам, лимит 11 снят — Task 14
 - ✅ Backfill формул «Пробіг» в существующих блоках — Task 15 (`find_mileage_blocks`, `/backfill`)
+- ✅ Поэтапный запуск: города только для пробега — Task 17 (`FULL_STATS_CHAT_IDS`)
 - ✅ Юнит-тесты на фильтрацию аналитики — Task 1–7, 15 (`tests/test_core.py`)
 - ✅ Отчёт 19:00 по каждому городу — Task 11
 - ✅ Уведомление о завершении в нужный чат — Task 10
