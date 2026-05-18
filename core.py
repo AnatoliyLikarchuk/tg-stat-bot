@@ -25,6 +25,35 @@ CLOSED_STATUSES = {
 }
 
 
+def compute_stats(records: list, in_period) -> dict:
+    """Статистика по записям, для которых in_period(record) истинно.
+
+    in_period — предикат record -> bool (фильтр по дате/периоду).
+    """
+    stats = {
+        "total_events": 0,
+        "by_type": {},
+        "by_driver": {},
+        "by_route": {},
+        "problems": [],
+    }
+    for r in records:
+        if not in_period(r):
+            continue
+        stats["total_events"] += 1
+        event_type = r.get("Событие", "unknown")
+        stats["by_type"][event_type] = stats["by_type"].get(event_type, 0) + 1
+        driver = r.get("Водитель", "")
+        if driver:
+            stats["by_driver"][driver] = stats["by_driver"].get(driver, 0) + 1
+        route = r.get("Маршрут", "")
+        if route:
+            stats["by_route"][route] = stats["by_route"].get(route, 0) + 1
+        if event_type == "проблема":
+            stats["problems"].append(r.get("Исходное сообщение", ""))
+    return stats
+
+
 def normalize_route(route_raw) -> str:
     """Номер маршрута → строка (gspread может вернуть int/float)."""
     if isinstance(route_raw, float):

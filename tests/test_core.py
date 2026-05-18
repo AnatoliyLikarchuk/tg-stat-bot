@@ -1,5 +1,5 @@
 import core
-from core import sanitize_sheet_name, compute_active_routes
+from core import sanitize_sheet_name, compute_active_routes, compute_stats
 
 
 def test_module_imports():
@@ -49,6 +49,35 @@ def test_all_departed_closes_route():
         _rec("18.05.2026", "все_выехали", "2", ""),
     ]
     assert compute_active_routes(records, "18.05.2026") == []
+
+
+def test_stats_counts_by_type_and_driver():
+    records = [
+        {"Дата": "18.05.2026", "Событие": "выезд", "Водитель": "Косич",
+         "Маршрут": "1", "Исходное сообщение": ""},
+        {"Дата": "18.05.2026", "Событие": "выезд", "Водитель": "Сергеєв",
+         "Маршрут": "2", "Исходное сообщение": ""},
+        {"Дата": "17.05.2026", "Событие": "проблема", "Водитель": "Косич",
+         "Маршрут": "1", "Исходное сообщение": "точку не доставив"},
+    ]
+    stats = compute_stats(records, lambda r: r.get("Дата") == "18.05.2026")
+    assert stats["total_events"] == 2
+    assert stats["by_type"]["выезд"] == 2
+    assert stats["by_driver"]["Косич"] == 1
+
+
+def test_stats_collects_problems():
+    records = [{"Дата": "18.05.2026", "Событие": "проблема", "Водитель": "",
+                "Маршрут": "", "Исходное сообщение": "поломка"}]
+    stats = compute_stats(records, lambda r: True)
+    assert stats["problems"] == ["поломка"]
+
+
+def test_stats_empty_when_predicate_excludes_all():
+    records = [{"Дата": "01.01.2020", "Событие": "выезд", "Водитель": "X",
+                "Маршрут": "1", "Исходное сообщение": ""}]
+    stats = compute_stats(records, lambda r: False)
+    assert stats["total_events"] == 0
 
 
 def test_sanitize_keeps_normal_name():
