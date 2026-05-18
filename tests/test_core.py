@@ -1,5 +1,6 @@
 import core
-from core import sanitize_sheet_name, compute_active_routes, compute_stats, compute_chain_violation
+from datetime import date
+from core import sanitize_sheet_name, compute_active_routes, compute_stats, compute_chain_violation, count_stale_rows
 
 
 def test_module_imports():
@@ -97,6 +98,31 @@ def test_chain_reports_missing_steps():
 
 def test_chain_ignores_non_chain_event():
     assert compute_chain_violation("проблема", []) is None
+
+
+def test_stale_none_when_all_fresh():
+    dates = ["18.05.2026", "17.05.2026", "16.05.2026"]
+    assert count_stale_rows(dates, date(2026, 1, 1)) == 0
+
+
+def test_stale_counts_bottom_old_rows():
+    # Новые строки сверху. Cutoff = 01.05.2026.
+    dates = ["18.05.2026", "10.05.2026", "20.04.2026", "01.04.2026"]
+    # Старше cutoff — две нижние
+    assert count_stale_rows(dates, date(2026, 5, 1)) == 2
+
+
+def test_stale_keeps_row_below_a_fresh_one():
+    # Локальная неупорядоченность: старая дата ВЫШЕ свежей.
+    # Удаляем только то, ниже чего нет свежих дат.
+    dates = ["18.05.2026", "01.01.2020", "17.05.2026", "01.04.2026"]
+    assert count_stale_rows(dates, date(2026, 5, 1)) == 1
+
+
+def test_stale_unparseable_date_is_kept():
+    dates = ["18.05.2026", "мусор", "01.04.2026"]
+    # "мусор" считается свежим (не удаляем), значит ниже него — 1 строка
+    assert count_stale_rows(dates, date(2026, 5, 1)) == 1
 
 
 def test_sanitize_keeps_normal_name():

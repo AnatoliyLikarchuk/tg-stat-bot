@@ -5,6 +5,7 @@
 """
 
 import unicodedata
+from datetime import datetime
 
 # Запрещённые символы в имени листа Google Sheets: []:*?/\
 # Скобки заменяются на пробел, остальное удаляется
@@ -31,6 +32,27 @@ _CHAIN_STEP_NAMES = {
     "выезд": "виїзд",
     "маршрут_завершён": "завершення",
 }
+
+
+def count_stale_rows(date_strings: list, cutoff) -> int:
+    """Сколько НИЖНИХ строк можно удалить при чистке.
+
+    date_strings — даты строк сверху вниз (формат %d.%m.%Y),
+    новые сверху. cutoff — datetime.date: строки строго старше
+    удаляются. Возвращает количество строк с конца, ниже которых
+    нет ни одной свежей или нераспознанной даты — устойчиво к
+    локальной неупорядоченности.
+    """
+    last_fresh = -1
+    for i, ds in enumerate(date_strings):
+        try:
+            d = datetime.strptime(str(ds), "%d.%m.%Y").date()
+        except (ValueError, TypeError):
+            last_fresh = i  # нераспознанную дату не трогаем
+            continue
+        if d >= cutoff:
+            last_fresh = i
+    return len(date_strings) - 1 - last_fresh
 
 
 def compute_chain_violation(event_type: str, existing_event_types: list):
