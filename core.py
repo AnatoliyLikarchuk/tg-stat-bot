@@ -34,6 +34,18 @@ _CHAIN_STEP_NAMES = {
 }
 
 
+def paginate(items: list, page: int, page_size: int):
+    """Возвращает (элементы_страницы, всего_страниц).
+
+    page — 0-based, выходит за границы → зажимается в [0, total-1].
+    Пустой список → одна пустая страница.
+    """
+    total_pages = max(1, (len(items) + page_size - 1) // page_size)
+    page = max(0, min(page, total_pages - 1))
+    start = page * page_size
+    return items[start:start + page_size], total_pages
+
+
 def count_stale_rows(date_strings: list, cutoff) -> int:
     """Сколько НИЖНИХ строк можно удалить при чистке.
 

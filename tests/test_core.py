@@ -1,6 +1,6 @@
 import core
 from datetime import date
-from core import sanitize_sheet_name, compute_active_routes, compute_stats, compute_chain_violation, count_stale_rows
+from core import sanitize_sheet_name, compute_active_routes, compute_stats, compute_chain_violation, count_stale_rows, paginate
 
 
 def test_module_imports():
@@ -123,6 +123,32 @@ def test_stale_unparseable_date_is_kept():
     dates = ["18.05.2026", "мусор", "01.04.2026"]
     # "мусор" считается свежим (не удаляем), значит ниже него — 1 строка
     assert count_stale_rows(dates, date(2026, 5, 1)) == 1
+
+
+def test_paginate_first_page():
+    items = list(range(20))
+    page_items, total = paginate(items, page=0, page_size=8)
+    assert page_items == list(range(8))
+    assert total == 3
+
+
+def test_paginate_last_partial_page():
+    items = list(range(20))
+    page_items, total = paginate(items, page=2, page_size=8)
+    assert page_items == [16, 17, 18, 19]
+    assert total == 3
+
+
+def test_paginate_clamps_out_of_range_page():
+    items = list(range(20))
+    page_items, total = paginate(items, page=99, page_size=8)
+    assert page_items == [16, 17, 18, 19]
+
+
+def test_paginate_empty_list():
+    page_items, total = paginate([], page=0, page_size=8)
+    assert page_items == []
+    assert total == 1
 
 
 def test_sanitize_keeps_normal_name():
