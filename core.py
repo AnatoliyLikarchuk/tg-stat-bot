@@ -24,6 +24,34 @@ CLOSED_STATUSES = {
     ]
 }
 
+# Человекочитаемые названия шагов цепочки (укр) для предупреждений
+_CHAIN_STEP_NAMES = {
+    "начало_сборки": "початок збірки",
+    "сборка_завершена": "збірка завершена",
+    "выезд": "виїзд",
+    "маршрут_завершён": "завершення",
+}
+
+
+def compute_chain_violation(event_type: str, existing_event_types: list):
+    """Описание пропущенных шагов цепочки или None, если всё ок.
+
+    existing_event_types — типы событий, уже зафиксированные
+    для этого маршрута за день.
+    """
+    if event_type not in EVENT_CHAIN:
+        return None
+    current_idx = EVENT_CHAIN.index(event_type)
+    if current_idx == 0:
+        return None  # начало_сборки — первый шаг, проверять нечего
+    missing = [
+        EVENT_CHAIN[i] for i in range(current_idx)
+        if EVENT_CHAIN[i] not in existing_event_types
+    ]
+    if not missing:
+        return None
+    return ", ".join(_CHAIN_STEP_NAMES.get(m, m) for m in missing)
+
 
 def compute_stats(records: list, in_period) -> dict:
     """Статистика по записям, для которых in_period(record) истинно.

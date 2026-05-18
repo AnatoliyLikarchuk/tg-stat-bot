@@ -1,5 +1,5 @@
 import core
-from core import sanitize_sheet_name, compute_active_routes, compute_stats
+from core import sanitize_sheet_name, compute_active_routes, compute_stats, compute_chain_violation
 
 
 def test_module_imports():
@@ -78,6 +78,25 @@ def test_stats_empty_when_predicate_excludes_all():
                 "Маршрут": "1", "Исходное сообщение": ""}]
     stats = compute_stats(records, lambda r: False)
     assert stats["total_events"] == 0
+
+
+def test_chain_ok_when_all_steps_present():
+    existing = ["начало_сборки", "сборка_завершена"]
+    assert compute_chain_violation("выезд", existing) is None
+
+
+def test_chain_first_step_never_violates():
+    assert compute_chain_violation("начало_сборки", []) is None
+
+
+def test_chain_reports_missing_steps():
+    # Завершение есть, но не было сборки и выезда
+    result = compute_chain_violation("маршрут_завершён", ["начало_сборки"])
+    assert result == "збірка завершена, виїзд"
+
+
+def test_chain_ignores_non_chain_event():
+    assert compute_chain_violation("проблема", []) is None
 
 
 def test_sanitize_keeps_normal_name():
