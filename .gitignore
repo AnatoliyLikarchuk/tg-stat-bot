@@ -1,4 +1,5 @@
 .env
+.env.local-backup
 credentials.json
 CLAUDE.md
 __pycache__/
