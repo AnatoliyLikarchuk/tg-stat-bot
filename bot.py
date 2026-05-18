@@ -374,6 +374,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Город = имя листа (из названия чата)
     group_name = update.effective_chat.title or "" if update.effective_chat else ""
     city = city_of(update)
+    full_stats = config.is_full_stats_chat(chat_id)
 
     # Сохраняем события по одному — чтобы откатить дедуп для тех,
     # которые не записались (тогда следующая копия сообщения сможет повторить запись)
@@ -384,8 +385,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ok = sheets_manager.upsert_mileage(
                 event.driver, event.mileage_km, datetime.now(tz)
             )
-        else:
+        elif full_stats:
             ok = sheets_manager.add_event(event, city, group_name)
+        else:
+            continue  # mileage-only чат — события маршрутов не пишем
 
         if ok:
             saved += 1
@@ -401,6 +404,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.set_reaction(reaction=[ReactionTypeEmoji("🏆")])
         except Exception as e:
             logger.warning(f"Не удалось поставить реакцию: {e}")
+
+        if not full_stats:
+            return  # mileage-only чат — статистику маршрутов не ведём
 
         # Проверка цепочки событий и предупреждения
         tz = pytz.timezone(config.TIMEZONE)

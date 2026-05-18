@@ -39,6 +39,15 @@ class Config:
     RETENTION_DAYS: int = int(os.getenv("RETENTION_DAYS", "90"))
     CLEANUP_TIME: str = os.getenv("CLEANUP_TIME", "03:00")
 
+    # Чаты с полной статистикой событий маршрутов (chat_id через запятую).
+    # Если задан — события сборки/выезда/завершения пишутся в лист города
+    # только для этих чатов; для остальных бот ведёт только пробег.
+    # Пусто — полная статистика для всех чатов (обратная совместимость).
+    _full_stats_raw = os.getenv("FULL_STATS_CHAT_IDS", "")
+    FULL_STATS_CHAT_IDS: list = [
+        c.strip() for c in _full_stats_raw.split(",") if c.strip()
+    ]
+
     # Часовой пояс
     TIMEZONE: str = os.getenv("TIMEZONE", "Europe/Kiev")
 
@@ -55,6 +64,16 @@ class Config:
     def is_user_allowed(cls, user_id: int) -> bool:
         """Проверяет, разрешён ли доступ пользователю."""
         return user_id in cls.ALLOWED_USERS
+
+    @classmethod
+    def is_full_stats_chat(cls, chat_id) -> bool:
+        """Вести ли полную статистику событий маршрутов для чата.
+
+        Пустой FULL_STATS_CHAT_IDS → True для всех (обратная совместимость).
+        """
+        if not cls.FULL_STATS_CHAT_IDS:
+            return True
+        return str(chat_id) in cls.FULL_STATS_CHAT_IDS
 
     @classmethod
     def validate(cls) -> bool:
