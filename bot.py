@@ -39,6 +39,16 @@ from config import config
 from parser import MessageParser
 from sheets import sheets_manager
 from scheduler import setup_scheduler
+import core
+
+
+def city_of(update: Update) -> str:
+    """Имя листа-города для чата апдейта."""
+    chat = update.effective_chat
+    title = chat.title if chat else ""
+    fallback = str(chat.id) if chat else "unknown"
+    return core.sanitize_sheet_name(title, fallback)
+
 
 # Настройка логирования
 logging.basicConfig(
@@ -298,10 +308,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not events:
         return  # Все события — дубликаты
 
-    # Получаем название группы
-    group_name = ""
-    if update.effective_chat:
-        group_name = update.effective_chat.title or ""
+    # Город = имя листа (из названия чата)
+    group_name = update.effective_chat.title or "" if update.effective_chat else ""
+    city = city_of(update)
 
     # Сохраняем события по одному — чтобы откатить дедуп для тех,
     # которые не записались (тогда следующая копия сообщения сможет повторить запись)
@@ -313,7 +322,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 event.driver, event.mileage_km, datetime.now(tz)
             )
         else:
-            ok = sheets_manager.add_event(event, group_name)
+            ok = sheets_manager.add_event(event, city, group_name)
 
         if ok:
             saved += 1
@@ -350,7 +359,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Проверка несоответствия маршрутов: водитель закрыл не тот маршрут
                 route_mismatch = False
                 if event.event_type == "маршрут_завершён" and event.driver and event.route_number:
-                    departed_route = sheets_manager.get_driver_departure_route(event.driver, today_str)
+                    departed_route = sheets_manager.get_driver_departure_route(city, event.driver, today_str)
                     if departed_route and departed_route != event.route_number:
                         route_mismatch = True
                         warn_text = (
@@ -367,7 +376,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Пропускаем если уже сработало несоответствие маршрутов (более информативно)
                 if event.route_number and not route_mismatch:
                     missing = sheets_manager.check_chain_violation(
-                        event.event_type, event.route_number, today_str
+                        city, event.event_type, event.route_number, today_str
                     )
                     if missing:
                         driver_info = f" ({event.driver})" if event.driver else ""
@@ -383,31 +392,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.warning(f"Ошибка проверки цепочки событий: {e}")
 
-        # Проверяем: если закрыли последний маршрут — уведомляем группу
-        has_route_completed = any(e.event_type == "маршрут_завершён" for e in events)
-        if has_route_completed and config.REPORT_CHAT_ID:
-            # Небольшая задержка чтобы Google API синхронизировал данные
-            await asyncio.sleep(1)
-            active_routes = sheets_manager.get_active_routes()
-            logger.info(f"[DEBUG] Проверка завершения: активных маршрутов = {len(active_routes)}")
-            if active_routes:
-                logger.info(f"[DEBUG] Активные: {[r.get('route') for r in active_routes]}")
-            if not active_routes:
+        # Закрыли последний маршрут города — уведомляем этот же чат
+        has_route_completed = any(
+            e.event_type == "маршрут_завершён" for e in events
+        )
+        if has_route_completed and update.effective_chat:
+            await asyncio.sleep(1)  # дать Google API синхронизироваться
+            remaining = sheets_manager.get_active_routes(city)
+            logger.info(f"[DEBUG] '{city}': активных маршрутов = {len(remaining)}")
+            if not remaining:
                 try:
-                    # Проверяем время для благодарности
                     now = datetime.now(tz)
                     if now.hour < 19:
-                        text = "✅ Всі маршрути завершені\n\n🎉 Сьогодні усі колеги-водії завершили до 19:00. Дякуємо! 👏🚚"
+                        text = ("✅ Всі маршрути завершені\n\n"
+                                "🎉 Сьогодні усі колеги-водії завершили "
+                                "до 19:00. Дякуємо! 👏🚚")
                     else:
                         text = "✅ Всі маршрути завершені"
-
                     await context.bot.send_message(
-                        chat_id=config.REPORT_CHAT_ID,
-                        text=text
+                        chat_id=update.effective_chat.id, text=text
                     )
-                    logger.info(f"Отправлено уведомление: все маршруты завершены (hour={now.hour})")
+                    logger.info(f"Уведомление о завершении: '{city}' (hour={now.hour})")
                 except Exception as e:
-                    logger.warning(f"Не удалось отправить уведомление о завершении: {e}")
+                    logger.warning(f"Не удалось отправить уведомление: {e}")
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
