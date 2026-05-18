@@ -310,6 +310,32 @@ class SheetsManager:
             logger.error(f"Ошибка получения списка городов: {e}")
             return []
 
+    def cleanup_old_rows(self, retention_days: int) -> int:
+        """Удаляет строки старше retention_days из всех листов городов.
+
+        Новые строки сверху → старые внизу. Для каждого листа считаем
+        через core.count_stale_rows, сколько нижних строк удалить.
+        Возвращает общее число удалённых строк.
+        """
+        cutoff = (datetime.now(TZ) - timedelta(days=retention_days)).date()
+        total_removed = 0
+        for city in self.list_city_sheets():
+            try:
+                ws = self._get_city_sheet(city)
+                date_col = ws.col_values(2)[1:]  # колонка B без заголовка
+                stale = core.count_stale_rows(date_col, cutoff)
+                if stale <= 0:
+                    continue
+                last_row = len(date_col) + 1  # +1 за заголовок
+                first_stale = last_row - stale + 1
+                ws.delete_rows(first_stale, last_row)
+                self.invalidate_cache(city)
+                total_removed += stale
+                logger.info(f"Чистка '{city}': удалено {stale} строк")
+            except Exception as e:
+                logger.error(f"Ошибка чистки листа '{city}': {e}")
+        return total_removed
+
     # ==================== Учёт километража (лист "Пробіг") ====================
 
     # Цвета (0..1) для форматирования блоков месяца
