@@ -8,13 +8,17 @@ import logging
 import time as time_module
 from datetime import datetime, timedelta
 import pytz
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReactionTypeEmoji
+from telegram import (
+    Update, ReplyKeyboardMarkup, KeyboardButton, ReactionTypeEmoji,
+    InlineKeyboardMarkup, InlineKeyboardButton,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
     ContextTypes,
     filters,
+    CallbackQueryHandler,
 )
 
 # Клавиатура с командами
@@ -48,6 +52,39 @@ def city_of(update: Update) -> str:
     title = chat.title if chat else ""
     fallback = str(chat.id) if chat else "unknown"
     return core.sanitize_sheet_name(title, fallback)
+
+
+CITY_PAGE_SIZE = 8
+
+# Какому действию какая функция-рендер соответствует
+ACTION_LABELS = {
+    "today": "📊 Статистика сегодня",
+    "week": "📈 За неделю",
+    "active": "🚗 Активные маршруты",
+}
+
+
+def build_city_keyboard(action: str, page: int) -> InlineKeyboardMarkup:
+    """Inline-клавиатура: список городов + пагинация для действия action."""
+    cities = sorted(sheets_manager.list_city_sheets())
+    page_cities, total_pages = core.paginate(cities, page, CITY_PAGE_SIZE)
+
+    rows = [[InlineKeyboardButton(c, callback_data=f"city|{action}|{c}")]
+            for c in page_cities]
+
+    nav = []
+    if total_pages > 1:
+        if page > 0:
+            nav.append(InlineKeyboardButton(
+                "◀", callback_data=f"page|{action}|{page - 1}"))
+        nav.append(InlineKeyboardButton(
+            f"{page + 1}/{total_pages}", callback_data="noop"))
+        if page < total_pages - 1:
+            nav.append(InlineKeyboardButton(
+                "▶", callback_data=f"page|{action}|{page + 1}"))
+    if nav:
+        rows.append(nav)
+    return InlineKeyboardMarkup(rows)
 
 
 # Настройка логирования
@@ -107,62 +144,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def stats_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Статистика за сегодня."""
-    if not check_access(update):
-        await access_denied(update)
-        return
-    stats = sheets_manager.get_today_stats()
-
-    if not stats or stats.get("total_events", 0) == 0:
-        await update.message.reply_text("📊 За сегодня событий пока нет.")
-        return
-
-    text = format_stats(stats, "сегодня")
-    await update.message.reply_text(text)
-
-
-async def stats_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Статистика за неделю."""
-    if not check_access(update):
-        await access_denied(update)
-        return
-    stats = sheets_manager.get_stats_for_period(7)
-
-    if not stats or stats.get("total_events", 0) == 0:
-        await update.message.reply_text("📊 За последние 7 дней событий нет.")
-        return
-
-    text = format_stats(stats, "неделю")
-    await update.message.reply_text(text)
-
-
-async def active_routes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает активные маршруты."""
-    if not check_access(update):
-        await access_denied(update)
-        return
-    routes = sheets_manager.get_active_routes()
-
-    if not routes:
-        await update.message.reply_text("🚗 Активных маршрутов нет.")
-        return
-
-    text = "🚗 Активные маршруты:\n\n"
-    for r in routes:
-        route_num = r['route'] or '?'
-        driver = r['driver'] or ''
-        status = r['status'].replace('_', ' ')  # маршрут_завершён → маршрут завершён
-        time = r['time'] or ''
-
-        text += f"• Маршрут {route_num}"
-        if driver:
-            text += f" ({driver})"
-        text += f" — {status} в {time}\n"
-
-    await update.message.reply_text(text)
-
-
 def format_stats(stats: dict, period: str) -> str:
     """Форматирует статистику для вывода."""
     text = f"📊 Статистика за {period}\n\n"
@@ -220,22 +201,82 @@ async def mileage_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик нажатий на кнопки."""
+    """Обработчик нажатий на reply-кнопки в личке."""
     if not check_access(update):
         await access_denied(update)
         return
     text = update.message.text
 
-    if text == "📊 Статистика сегодня":
-        await stats_today(update, context)
-    elif text == "📈 За неделю":
-        await stats_week(update, context)
-    elif text == "🚗 Активные маршруты":
-        await active_routes(update, context)
+    action_by_label = {
+        "📊 Статистика сегодня": "today",
+        "📈 За неделю": "week",
+        "🚗 Активные маршруты": "active",
+    }
+    if text in action_by_label:
+        action = action_by_label[text]
+        cities = sheets_manager.list_city_sheets()
+        if not cities:
+            await update.message.reply_text("Пока нет ни одного города.")
+            return
+        await update.message.reply_text(
+            f"{text} — выбери город:",
+            reply_markup=build_city_keyboard(action, page=0),
+        )
     elif text == "❓ Помощь":
         await help_command(update, context)
     elif text == "📏 Километраж за неделю":
         await mileage_week(update, context)
+
+
+async def on_city_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает inline-кнопки выбора города и пагинации."""
+    query = update.callback_query
+    await query.answer()
+    if not config.is_user_allowed(query.from_user.id):
+        return
+
+    parts = query.data.split("|")
+    kind = parts[0]
+
+    if kind == "noop":
+        return
+
+    if kind == "page":
+        action, page = parts[1], int(parts[2])
+        await query.edit_message_reply_markup(
+            reply_markup=build_city_keyboard(action, page)
+        )
+        return
+
+    if kind == "city":
+        action, city = parts[1], parts[2]
+        text = render_city_data(action, city)
+        await query.edit_message_text(text)
+
+
+def render_city_data(action: str, city: str) -> str:
+    """Текст ответа для действия action по городу city."""
+    if action == "today":
+        stats = sheets_manager.get_today_stats(city)
+        if not stats or stats.get("total_events", 0) == 0:
+            return f"📊 {city}: за сегодня событий пока нет."
+        return f"🏙 {city}\n" + format_stats(stats, "сегодня")
+    if action == "week":
+        stats = sheets_manager.get_stats_for_period(city, 7)
+        if not stats or stats.get("total_events", 0) == 0:
+            return f"📊 {city}: за последние 7 дней событий нет."
+        return f"🏙 {city}\n" + format_stats(stats, "неделю")
+    if action == "active":
+        routes = sheets_manager.get_active_routes(city)
+        if not routes:
+            return f"🚗 {city}: активных маршрутов нет."
+        text = f"🚗 {city} — активные маршруты:\n\n"
+        for r in routes:
+            driver = f" ({r['driver']})" if r.get("driver") else ""
+            status = (r.get("status") or "").replace("_", " ")
+            text += f"• Маршрут {r.get('route') or '?'}{driver} — {status} в {r.get('time') or ''}\n"
+        return text
+    return "Неизвестное действие."
 
 
 async def handle_private_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -444,6 +485,7 @@ def main():
 
     # Регистрируем обработчик /start
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(on_city_callback))
 
     # Обработчик кнопок в личных сообщениях
     app.add_handler(MessageHandler(
