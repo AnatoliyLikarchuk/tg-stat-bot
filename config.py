@@ -27,11 +27,17 @@ class Config:
     )
 
     # Автоотчёты
-    REPORT_CHAT_ID: str = os.getenv("REPORT_CHAT_ID", "")
+    # REPORT_CHAT_IDS — чаты для отчёта 19:00, через запятую.
+    # Обратная совместимость: одиночный REPORT_CHAT_ID тоже принимается.
+    _report_ids_raw = os.getenv("REPORT_CHAT_IDS", "") or os.getenv("REPORT_CHAT_ID", "")
+    REPORT_CHAT_IDS: list = [
+        c.strip() for c in _report_ids_raw.split(",") if c.strip()
+    ]
     ACTIVE_ROUTES_REPORT_TIME: str = os.getenv("ACTIVE_ROUTES_REPORT_TIME", "19:00")
-    DAILY_REPORT_TIME: str = os.getenv("DAILY_REPORT_TIME", "20:00")
-    WEEKLY_REPORT_DAY: int = int(os.getenv("WEEKLY_REPORT_DAY", "0"))  # 0 = понедельник
-    WEEKLY_REPORT_TIME: str = os.getenv("WEEKLY_REPORT_TIME", "09:00")
+
+    # Чистка старых строк
+    RETENTION_DAYS: int = int(os.getenv("RETENTION_DAYS", "90"))
+    CLEANUP_TIME: str = os.getenv("CLEANUP_TIME", "03:00")
 
     # Часовой пояс
     TIMEZONE: str = os.getenv("TIMEZONE", "Europe/Kiev")

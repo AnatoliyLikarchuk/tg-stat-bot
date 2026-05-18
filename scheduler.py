@@ -3,7 +3,6 @@
 Использует JobQueue из python-telegram-bot с поддержкой timezone.
 """
 
-import asyncio
 import logging
 from datetime import time
 import pytz
@@ -11,56 +10,54 @@ from telegram.ext import ContextTypes
 
 from config import config
 from sheets import sheets_manager
+import core
 
 logger = logging.getLogger(__name__)
 
 
 def setup_scheduler(application):
-    """Настраивает планировщик отчётов."""
-    if not config.REPORT_CHAT_ID:
-        logger.warning("REPORT_CHAT_ID не задан, автоотчёты отключены")
-        return
-
-    # Парсим время из конфига (формат "HH:MM")
-    hour, minute = map(int, config.ACTIVE_ROUTES_REPORT_TIME.split(":"))
-
-    # Создаём time с timezone
+    """Настраивает планировщик отчётов и чистки."""
     tz = pytz.timezone(config.TIMEZONE)
-    report_time = time(hour=hour, minute=minute, tzinfo=tz)
 
-    # Планируем ежедневный отчёт
+    if config.REPORT_CHAT_IDS:
+        hour, minute = map(int, config.ACTIVE_ROUTES_REPORT_TIME.split(":"))
+        application.job_queue.run_daily(
+            send_active_routes_report,
+            time=time(hour=hour, minute=minute, tzinfo=tz),
+            name="active_routes_report",
+        )
+        logger.info(
+            f"Отчёт активных маршрутов в {config.ACTIVE_ROUTES_REPORT_TIME} "
+            f"для {len(config.REPORT_CHAT_IDS)} чатов"
+        )
+    else:
+        logger.warning("REPORT_CHAT_IDS не задан, автоотчёты отключены")
+
+    cl_hour, cl_minute = map(int, config.CLEANUP_TIME.split(":"))
     application.job_queue.run_daily(
-        send_active_routes_report,
-        time=report_time,
-        name="active_routes_report"
+        cleanup_old_rows_job,
+        time=time(hour=cl_hour, minute=cl_minute, tzinfo=tz),
+        name="cleanup_old_rows",
     )
-
-    logger.info(f"Планировщик запущен: активные маршруты в {config.ACTIVE_ROUTES_REPORT_TIME} ({config.TIMEZONE})")
+    logger.info(f"Чистка старых строк в {config.CLEANUP_TIME} ({config.TIMEZONE})")
 
 
 async def send_active_routes_report(context: ContextTypes.DEFAULT_TYPE):
-    """Отправляет отчёт об активных маршрутах в 19:00."""
-    max_retries = 3
-    for attempt in range(1, max_retries + 1):
+    """Отчёт об активных маршрутах в каждый настроенный чат."""
+    for chat_id in config.REPORT_CHAT_IDS:
         try:
-            routes = sheets_manager.get_active_routes()
-
-            # Если все маршруты закрыты — не отправляем (уведомление уже было)
+            chat = await context.bot.get_chat(chat_id)
+            city = core.sanitize_sheet_name(chat.title or "", str(chat_id))
+            routes = sheets_manager.get_active_routes(city)
             if not routes:
-                logger.info("19:00 — активных маршрутов нет, пропускаем отчёт")
-                return
-
-            text = format_active_routes(routes)
+                logger.info(f"19:00 — '{city}': активных маршрутов нет")
+                continue
             await context.bot.send_message(
-                chat_id=config.REPORT_CHAT_ID,
-                text=text
+                chat_id=chat_id, text=format_active_routes(routes)
             )
-            logger.info(f"Отправлен отчёт об активных маршрутах ({len(routes)} маршрутов)")
-            return
+            logger.info(f"Отчёт активных маршрутов '{city}': {len(routes)}")
         except Exception as e:
-            logger.error(f"Ошибка отчёта об активных маршрутах (попытка {attempt}/{max_retries}): {e}")
-            if attempt < max_retries:
-                await asyncio.sleep(5)
+            logger.error(f"Ошибка отчёта для чата {chat_id}: {e}")
 
 
 def format_active_routes(routes: list) -> str:
@@ -80,3 +77,12 @@ def format_active_routes(routes: list) -> str:
         text += "\n"
 
     return text
+
+
+async def cleanup_old_rows_job(context: ContextTypes.DEFAULT_TYPE):
+    """Ночная чистка строк старше RETENTION_DAYS во всех листах городов."""
+    try:
+        removed = sheets_manager.cleanup_old_rows(config.RETENTION_DAYS)
+        logger.info(f"Чистка завершена: удалено строк — {removed}")
+    except Exception as e:
+        logger.error(f"Ошибка ночной чистки: {e}")
