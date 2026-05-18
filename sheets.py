@@ -6,7 +6,6 @@
 import logging
 import time
 import gspread
-import unicodedata
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -42,7 +41,6 @@ class SheetsManager:
     def __init__(self):
         self.client = None
         self.spreadsheet = None
-        self.worksheet = None
         self.mileage_sheet = None
         self.mileage_sheet_id = None
         self._city_sheets = {}    # {city_name: worksheet}
@@ -187,272 +185,130 @@ class SheetsManager:
                     continue
                 raise
 
-    def add_event(self, event: ParsedEvent, group_name: str = "") -> bool:
-        """Добавляет событие в таблицу (вставляет сверху, сразу после заголовка).
+    def add_event(self, event: ParsedEvent, city: str, group_name: str = "") -> bool:
+        """Добавляет событие в лист города (строка 2, сразу после заголовка).
 
-        При временных ошибках Google API (503/429/таймауты/обрывы) делает retry с backoff.
+        При временных ошибках Google API делает retry с backoff.
         """
         row = [
-            "",  # A - автонумерация формулой
+            "",  # A — автонумерация формулой
             datetime.now(TZ).strftime("%d.%m.%Y"),
             event.time or datetime.now(TZ).strftime("%H:%M"),
             event.event_type,
             event.route_number or "",
             event.driver or "",
-            event.raw_text[:200],  # Ограничиваем длину
-            group_name
+            event.raw_text[:200],
+            group_name,
         ]
 
         def _do():
-            # Вставляем новую строку сразу после заголовка (позиция 2)
-            self.worksheet.insert_row(row, index=2)
-            # insert_row сдвигает формулу из A2 в A3. Восстанавливаем в A2
-            # и ПОЛНОСТЬЮ очищаем A3 (запись '' оставила бы пустую строку, из-за
-            # которой ARRAYFORMULA не может раскрыться — будет #REF!).
-            self.worksheet.update("A2", [['=ARRAYFORMULA(IF(B2:B="";"";ROW(B2:B)-1))']], value_input_option='USER_ENTERED')
-            self.worksheet.batch_clear(["A3"])
-            self.invalidate_cache()
+            ws = self._get_city_sheet(city)
+            ws.insert_row(row, index=2)
+            ws.update(
+                "A2",
+                [['=ARRAYFORMULA(IF(B2:B="";"";ROW(B2:B)-1))']],
+                value_input_option="USER_ENTERED",
+            )
+            ws.batch_clear(["A3"])
+            self.invalidate_cache(city)
             return True
 
         try:
             return self._with_retry("Запись события", _do)
         except Exception as e:
-            logger.error(f"Ошибка записи в таблицу: {e}")
+            logger.error(f"Ошибка записи в лист '{city}': {e}")
             return False
 
-    def add_events(self, events: List[ParsedEvent], group_name: str = "") -> int:
-        """Добавляет несколько событий. Возвращает количество успешных записей."""
-        count = 0
-        for event in events:
-            if self.add_event(event, group_name):
-                count += 1
-        return count
-
-    def get_today_stats(self) -> dict:
-        """Получает статистику за сегодня."""
-        today = datetime.now(TZ).strftime("%d.%m.%Y")
-        return self._get_stats_for_date(today)
-
-    def get_stats_for_period(self, days: int = 7) -> dict:
-        """Получает статистику за указанное количество дней."""
-        try:
-            all_records = self._get_recent_records(max_rows=days * 80)
-            today = datetime.now(TZ)
-
-            stats = {
-                "total_events": 0,
-                "by_type": {},
-                "by_driver": {},
-                "by_route": {},
-                "problems": []
-            }
-
-            for record in all_records:
-                try:
-                    record_date = datetime.strptime(record.get("Дата", ""), "%d.%m.%Y")
-                    diff = (today.replace(tzinfo=None) - record_date).days
-                    if diff <= days:
-                        self._add_to_stats(stats, record)
-                except ValueError:
-                    continue
-
-            return stats
-
-        except Exception as e:
-            logger.error(f"Ошибка получения статистики: {e}")
-            return {}
-
-    def _get_stats_for_date(self, date_str: str) -> dict:
-        """Получает статистику за конкретную дату."""
-        try:
-            all_records = self._get_recent_records(max_rows=200)
-
-            stats = {
-                "total_events": 0,
-                "by_type": {},
-                "by_driver": {},
-                "by_route": {},
-                "problems": []
-            }
-
-            for record in all_records:
-                if record.get("Дата") == date_str:
-                    self._add_to_stats(stats, record)
-
-            return stats
-
-        except Exception as e:
-            logger.error(f"Ошибка получения статистики: {e}")
-            return {}
-
-    def _add_to_stats(self, stats: dict, record: dict):
-        """Добавляет запись в статистику."""
-        stats["total_events"] += 1
-
-        event_type = record.get("Событие", "unknown")
-        stats["by_type"][event_type] = stats["by_type"].get(event_type, 0) + 1
-
-        driver = record.get("Водитель", "")
-        if driver:
-            stats["by_driver"][driver] = stats["by_driver"].get(driver, 0) + 1
-
-        route = record.get("Маршрут", "")
-        if route:
-            stats["by_route"][route] = stats["by_route"].get(route, 0) + 1
-
-        if event_type == "проблема":
-            stats["problems"].append(record.get("Исходное сообщение", ""))
-
-    # Статусы, означающие завершение маршрута
-    CLOSED_STATUSES = {
-        unicodedata.normalize('NFC', s) for s in [
-            "маршрут_завершён",   # основной статус (с ё)
-            "маршрут_завершен",   # вариант без ё (на случай ручного ввода)
-            "все_выехали",
-        ]
-    }
-
-    @staticmethod
-    def _normalize_route(route_raw) -> str:
-        """Приводит номер маршрута к строке (gspread может вернуть int или float)."""
-        if isinstance(route_raw, float):
-            return str(int(route_raw))
-        if isinstance(route_raw, int):
-            return str(route_raw)
-        return str(route_raw).strip()
-
-    def get_active_routes(self) -> List[dict]:
-        """Получает активные маршруты (начаты, но не завершены).
-
-        Проверяет ВСЕ записи за день для каждого маршрута, а не только
-        верхнюю (последнюю вставленную). Это защищает от ситуации, когда
-        события записываются не в хронологическом порядке (например, выезд
-        отправлен позже завершения маршрута).
-        """
+    def get_today_stats(self, city: str) -> dict:
+        """Статистика города за сегодня."""
         try:
             today = datetime.now(TZ).strftime("%d.%m.%Y")
-            all_records = self._get_recent_records(max_rows=200)
-
-            routes_info = {}    # {route_number: info для отображения}
-            closed_routes = set()  # маршруты с событием завершения
-
-            for record in all_records:
-                if record.get("Дата") != today:
-                    continue
-                route = self._normalize_route(record.get("Маршрут", ""))
-                if not route:
-                    continue
-
-                status = unicodedata.normalize('NFC', str(record.get("Событие", "")))
-
-                # Если маршрут завершён — запоминаем
-                if status in self.CLOSED_STATUSES:
-                    closed_routes.add(route)
-
-                # Для отображения берём самый продвинутый шаг цепочки.
-                # Порядок строк в таблице не всегда хронологический (выезд
-                # может быть записан раньше завершения сборки), поэтому
-                # верхнюю строку брать нельзя — статус будет неточным.
-                rank = self.EVENT_CHAIN.index(status) if status in self.EVENT_CHAIN else -1
-                prev = routes_info.get(route)
-                if prev is None or rank > prev["_rank"]:
-                    routes_info[route] = {
-                        "route": route,
-                        "driver": record.get("Водитель", ""),
-                        "status": record.get("Событие", ""),
-                        "time": record.get("Время", ""),
-                        "_rank": rank,
-                    }
-
-            # Фильтруем: активные = есть записи, но НЕТ завершения
-            active = [
-                r for route, r in routes_info.items()
-                if route not in closed_routes
-            ]
-            # Убираем служебный ключ сортировки
-            for r in active:
-                del r["_rank"]
-
-            return active
-
+            records = self._get_recent_records(city, max_rows=200)
+            return core.compute_stats(records, lambda r: r.get("Дата") == today)
         except Exception as e:
-            logger.error(f"Ошибка получения активных маршрутов: {e}")
+            logger.error(f"Ошибка статистики за сегодня ('{city}'): {e}")
+            return {}
+
+    def get_stats_for_period(self, city: str, days: int = 7) -> dict:
+        """Статистика города за последние `days` дней."""
+        try:
+            records = self._get_recent_records(city, max_rows=days * 80)
+            today = datetime.now(TZ).replace(tzinfo=None)
+
+            def in_period(r):
+                try:
+                    rec_date = datetime.strptime(r.get("Дата", ""), "%d.%m.%Y")
+                except ValueError:
+                    return False
+                return (today - rec_date).days <= days
+
+            return core.compute_stats(records, in_period)
+        except Exception as e:
+            logger.error(f"Ошибка статистики за период ('{city}'): {e}")
+            return {}
+
+    def get_active_routes(self, city: str) -> List[dict]:
+        """Активные маршруты города (начаты, но не завершены) за сегодня."""
+        try:
+            today = datetime.now(TZ).strftime("%d.%m.%Y")
+            records = self._get_recent_records(city, max_rows=200)
+            return core.compute_active_routes(records, today)
+        except Exception as e:
+            logger.error(f"Ошибка активных маршрутов ('{city}'): {e}")
             return []
 
-    def get_driver_departure_route(self, driver: str, date: str) -> Optional[str]:
-        """Ищет номер маршрута, с которым водитель выехал сегодня."""
+    def get_driver_departure_route(self, city: str, driver: str,
+                                   date: str) -> Optional[str]:
+        """Номер маршрута, с которым водитель выехал сегодня в этом городе."""
         try:
-            all_records = self._get_recent_records(max_rows=200)
+            records = self._get_recent_records(city, max_rows=200)
             driver_lower = driver.lower()
-
-            for record in all_records:
-                if record.get("Дата") != date:
+            for r in records:
+                if r.get("Дата") != date or r.get("Событие") != "выезд":
                     continue
-                if record.get("Событие") != "выезд":
-                    continue
-                record_driver = str(record.get("Водитель", "")).lower()
-                if record_driver == driver_lower:
-                    route = self._normalize_route(record.get("Маршрут", ""))
+                if str(r.get("Водитель", "")).lower() == driver_lower:
+                    route = core.normalize_route(r.get("Маршрут", ""))
                     if route:
                         return route
             return None
-
         except Exception as e:
-            logger.error(f"Ошибка поиска маршрута выезда: {e}")
+            logger.error(f"Ошибка поиска маршрута выезда ('{city}'): {e}")
             return None
 
-    # Ожидаемая цепочка событий маршрута
-    EVENT_CHAIN = ["начало_сборки", "сборка_завершена", "выезд", "маршрут_завершён"]
-
-    def get_route_events_today(self, route_number: str, date: str) -> List[str]:
-        """Возвращает список типов событий для маршрута за сегодня."""
+    def get_route_events_today(self, city: str, route_number: str,
+                               date: str) -> List[str]:
+        """Типы событий маршрута за день в этом городе."""
         try:
-            all_records = self._get_recent_records(max_rows=200)
+            records = self._get_recent_records(city, max_rows=200)
             events = []
-            for record in all_records:
-                if record.get("Дата") != date:
+            for r in records:
+                if r.get("Дата") != date:
                     continue
-                route = self._normalize_route(record.get("Маршрут", ""))
-                if route == route_number:
-                    events.append(record.get("Событие", ""))
+                if core.normalize_route(r.get("Маршрут", "")) == route_number:
+                    events.append(r.get("Событие", ""))
             return events
         except Exception as e:
-            logger.error(f"Ошибка получения событий маршрута: {e}")
+            logger.error(f"Ошибка событий маршрута ('{city}'): {e}")
             return []
 
-    def check_chain_violation(self, event_type: str, route_number: str, date: str) -> Optional[str]:
-        """Проверяет нарушение цепочки событий маршрута.
-
-        Возвращает описание пропущенного шага или None если всё ок.
-        """
-        if event_type not in self.EVENT_CHAIN or not route_number:
+    def check_chain_violation(self, city: str, event_type: str,
+                              route_number: str, date: str) -> Optional[str]:
+        """Описание пропущенного шага цепочки или None."""
+        if not route_number:
             return None
+        existing = self.get_route_events_today(city, route_number, date)
+        return core.compute_chain_violation(event_type, existing)
 
-        current_idx = self.EVENT_CHAIN.index(event_type)
-        if current_idx == 0:
-            return None  # начало_сборки — первый шаг, проверять нечего
-
-        existing_events = self.get_route_events_today(route_number, date)
-
-        # Проверяем все предыдущие шаги цепочки
-        missing = []
-        for i in range(current_idx):
-            expected = self.EVENT_CHAIN[i]
-            if expected not in existing_events:
-                missing.append(expected)
-
-        if missing:
-            missing_names = {
-                "начало_сборки": "початок збірки",
-                "сборка_завершена": "збірка завершена",
-                "выезд": "виїзд",
-                "маршрут_завершён": "завершення",
-            }
-            missing_str = ", ".join(missing_names.get(m, m) for m in missing)
-            return missing_str
-
-        return None
-
+    def list_city_sheets(self) -> List[str]:
+        """Имена листов-городов (без служебных)."""
+        try:
+            return [
+                ws.title for ws in self.spreadsheet.worksheets()
+                if ws.title not in core.RESERVED_SHEET_NAMES
+            ]
+        except Exception as e:
+            logger.error(f"Ошибка получения списка городов: {e}")
+            return []
 
     # ==================== Учёт километража (лист "Пробіг") ====================
 
