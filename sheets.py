@@ -15,6 +15,7 @@ from threading import Lock
 from typing import List, Optional
 from parser import ParsedEvent
 from config import config
+import core
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +45,8 @@ class SheetsManager:
         self.worksheet = None
         self.mileage_sheet = None
         self.mileage_sheet_id = None
-        self._cache = None        # кэш последнего чтения _get_recent_records
-        self._cache_ts = 0        # timestamp кэша
+        self._city_sheets = {}    # {city_name: worksheet}
+        self._cache = {}          # {city_name: (records, timestamp)}
         self._CACHE_TTL = 5       # TTL кэша в секундах
         self._mileage_lock = Lock()
         self._driver_rows_cache = None  # {driver_name: row_index_1_based}
@@ -77,12 +78,6 @@ class SheetsManager:
                 self.spreadsheet = self.client.create(config.GOOGLE_SHEETS_SPREADSHEET_NAME)
                 logger.info(f"Создана новая таблица: {config.GOOGLE_SHEETS_SPREADSHEET_NAME}")
 
-            # Получаем первый лист
-            self.worksheet = self.spreadsheet.sheet1
-
-            # Проверяем/добавляем заголовки
-            self._ensure_headers()
-
             # Подключаем лист учёта километража (опционально — если нет, фича отключена)
             try:
                 self.mileage_sheet = self.spreadsheet.worksheet(self.MILEAGE_SHEET_NAME)
@@ -100,57 +95,60 @@ class SheetsManager:
             logger.error(f"Ошибка подключения к Google Sheets: {e}")
             return False
 
-    def _ensure_headers(self):
-        """Проверяет наличие заголовков, добавляет если нужно."""
+    def _get_city_sheet(self, city: str):
+        """Возвращает worksheet города, создаёт лист при отсутствии.
+
+        Новый лист получает заголовки и ARRAYFORMULA автонумерации.
+        """
+        ws = self._city_sheets.get(city)
+        if ws is not None:
+            return ws
         try:
-            first_row = self.worksheet.row_values(1)
-            # Проверяем первые 8 колонок и очищаем лишние справа
-            if not first_row or first_row[:8] != self.HEADERS:
-                self.worksheet.update("A1:H1", [self.HEADERS])
-                # Формула автонумерации (русская локаль - точка с запятой)
-                self.worksheet.update("A2", [['=ARRAYFORMULA(IF(B2:B="";"";ROW(B2:B)-1))']], value_input_option='USER_ENTERED')
-            # Очищаем лишние колонки справа (I, J, K) если там что-то есть
-            if len(first_row) > 8:
-                self.worksheet.batch_clear(["I1:K1"])
-        except Exception:
-            self.worksheet.update("A1:H1", [self.HEADERS])
-            self.worksheet.update("A2", [['=ARRAYFORMULA(IF(B2:B="";"";ROW(B2:B)-1))']], value_input_option='USER_ENTERED')
+            ws = self.spreadsheet.worksheet(city)
+        except gspread.WorksheetNotFound:
+            ws = self.spreadsheet.add_worksheet(title=city, rows=1000, cols=8)
+            ws.update("A1:H1", [self.HEADERS])
+            ws.update(
+                "A2",
+                [['=ARRAYFORMULA(IF(B2:B="";"";ROW(B2:B)-1))']],
+                value_input_option="USER_ENTERED",
+            )
+            logger.info(f"Создан лист города: {city}")
+        self._city_sheets[city] = ws
+        return ws
 
-    def _get_recent_records(self, max_rows: int = 200) -> List[dict]:
-        """Читает только первые max_rows строк данных (новые сверху).
+    def _get_recent_records(self, city: str, max_rows: int = 200) -> List[dict]:
+        """Читает первые max_rows строк листа города (новые сверху).
 
-        Вместо get_all_records() который тянет ВСЕ строки (2000+),
-        читаем только нужный диапазон. Для сегодняшних данных хватает ~200,
-        для недельных ~500.
-
-        Результат кэшируется на 5 секунд, чтобы множественные проверки
-        (цепочка, несоответствие маршрутов) не дёргали API повторно.
+        Результат кэшируется на 5 секунд per-city, чтобы множественные
+        проверки (цепочка, несоответствие маршрутов) не дёргали API.
         """
         now = time.time()
-        if self._cache is not None and (now - self._cache_ts) < self._CACHE_TTL and max_rows <= 200:
-            return self._cache
+        cached = self._cache.get(city)
+        if cached is not None and (now - cached[1]) < self._CACHE_TTL and max_rows <= 200:
+            return cached[0]
 
-        # +1 для заголовка
-        data = self.worksheet.get(f'A1:H{max_rows + 1}')
+        ws = self._get_city_sheet(city)
+        data = ws.get(f"A1:H{max_rows + 1}")
         if not data or len(data) < 2:
             return []
 
         headers = data[0]
         records = []
         for row in data[1:]:
-            # Дополняем короткие строки пустыми значениями
-            padded = row + [''] * (len(headers) - len(row))
+            padded = row + [""] * (len(headers) - len(row))
             records.append(dict(zip(headers, padded)))
 
         if max_rows <= 200:
-            self._cache = records
-            self._cache_ts = now
-
+            self._cache[city] = (records, now)
         return records
 
-    def invalidate_cache(self):
-        """Сбрасывает кэш (вызывать после записи)."""
-        self._cache = None
+    def invalidate_cache(self, city: str = None):
+        """Сбрасывает кэш чтения. Без аргумента — для всех городов."""
+        if city is None:
+            self._cache.clear()
+        else:
+            self._cache.pop(city, None)
 
     # HTTP-коды, при которых имеет смысл повторить запрос
     _RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
