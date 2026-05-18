@@ -238,7 +238,7 @@ class SheetsManager:
             def in_period(r):
                 try:
                     rec_date = datetime.strptime(r.get("Дата", ""), "%d.%m.%Y")
-                except ValueError:
+                except (ValueError, TypeError):
                     return False
                 return (today - rec_date).days <= days
 
@@ -329,6 +329,14 @@ class SheetsManager:
                 last_row = len(date_col) + 1  # +1 за заголовок
                 first_stale = last_row - stale + 1
                 ws.delete_rows(first_stale, last_row)
+                if first_stale == 2:
+                    # Удалены все строки данных — вместе с ними ушла
+                    # ARRAYFORMULA автонумерации в A2. Восстанавливаем.
+                    ws.update(
+                        "A2",
+                        [['=ARRAYFORMULA(IF(B2:B="";"";ROW(B2:B)-1))']],
+                        value_input_option="USER_ENTERED",
+                    )
                 self.invalidate_cache(city)
                 total_removed += stale
                 logger.info(f"Чистка '{city}': удалено {stale} строк")

@@ -65,12 +65,18 @@ ACTION_LABELS = {
 
 
 def build_city_keyboard(action: str, page: int) -> InlineKeyboardMarkup:
-    """Inline-клавиатура: список городов + пагинация для действия action."""
-    cities = sorted(sheets_manager.list_city_sheets())
-    page_cities, total_pages = core.paginate(cities, page, CITY_PAGE_SIZE)
+    """Inline-клавиатура: список городов + пагинация для действия action.
 
-    rows = [[InlineKeyboardButton(c, callback_data=f"city|{action}|{c}")]
-            for c in page_cities]
+    Город кодируется в callback_data индексом в отсортированном списке,
+    а не именем: имя может превысить лимит callback_data Telegram
+    (64 байта) или содержать разделитель «|».
+    """
+    cities = sorted(sheets_manager.list_city_sheets())
+    indexes, total_pages = core.paginate(
+        list(range(len(cities))), page, CITY_PAGE_SIZE)
+
+    rows = [[InlineKeyboardButton(cities[i], callback_data=f"city|{action}|{i}")]
+            for i in indexes]
 
     nav = []
     if total_pages > 1:
@@ -259,8 +265,14 @@ async def on_city_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if kind == "city":
-        action, city = parts[1], parts[2]
-        text = render_city_data(action, city)
+        action, idx = parts[1], int(parts[2])
+        cities = sorted(sheets_manager.list_city_sheets())
+        if idx < 0 or idx >= len(cities):
+            await query.edit_message_text(
+                "Список городов изменился — открой меню заново."
+            )
+            return
+        text = render_city_data(action, cities[idx])
         await query.edit_message_text(text)
 
 
