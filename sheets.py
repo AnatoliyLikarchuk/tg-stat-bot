@@ -451,6 +451,15 @@ class SheetsManager:
         self._driver_rows_ts = now
         return result
 
+    def get_mileage_drivers(self) -> set:
+        """Множество имён водителей из листа «Пробіг» (колонка B).
+
+        Источник правды о валидных водителях для учёта пробега.
+        Переиспользует кэш _get_driver_rows() (TTL 1 час). Если лист
+        недоступен — возвращает пустое множество.
+        """
+        return set(self._get_driver_rows().keys())
+
     def upsert_mileage(self, driver: str, km: int, dt: datetime) -> bool:
         """Записывает пробег водителя за день в лист 'Пробіг'.
 
