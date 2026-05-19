@@ -179,7 +179,7 @@ class MessageParser:
 
         return result
 
-    def parse(self, text: str, known_drivers=frozenset()) -> List[ParsedEvent]:
+    def parse(self, text: str, known_drivers: set = frozenset()) -> List[ParsedEvent]:
         """
         Парсит сообщение и возвращает список событий.
         Одно сообщение может содержать несколько событий.
