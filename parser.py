@@ -6,7 +6,7 @@
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Collection
 
 
 @dataclass
@@ -179,7 +179,7 @@ class MessageParser:
 
         return result
 
-    def parse(self, text: str, known_drivers: set = frozenset()) -> List[ParsedEvent]:
+    def parse(self, text: str, known_drivers: Collection[str] = frozenset()) -> List[ParsedEvent]:
         """
         Парсит сообщение и возвращает список событий.
         Одно сообщение может содержать несколько событий.
