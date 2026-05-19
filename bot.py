@@ -335,7 +335,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text in BUTTON_LABELS:
         return
 
-    events = parser.parse(text)
+    known_drivers = sheets_manager.get_mileage_drivers()
+    events = parser.parse(text, known_drivers)
 
     # DEBUG: логируем результат парсинга
     if events:
