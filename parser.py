@@ -53,13 +53,6 @@ class MessageParser:
         # "иванов": "Іванов",
     }
 
-    # Список валидных водителей для учёта километража.
-    # Сообщение от водителя не из этого списка → молча игнорируется.
-    KNOWN_DRIVERS = {
-        "Буркало", "Галунько", "Горбатко", "Горобець", "Грабіченко",
-        "Карпенко", "Качаєнко", "Косич", "Овчаренко", "Роговський", "Сергеєв",
-    }
-
     # Транслитерация рус → укр (для автоматической нормализации)
     RU_TO_UA = {
         "и": "і",
@@ -186,7 +179,7 @@ class MessageParser:
 
         return result
 
-    def parse(self, text: str) -> List[ParsedEvent]:
+    def parse(self, text: str, known_drivers=frozenset()) -> List[ParsedEvent]:
         """
         Парсит сообщение и возвращает список событий.
         Одно сообщение может содержать несколько событий.
@@ -209,7 +202,7 @@ class MessageParser:
         if mileage_match:
             raw_name, km_str = mileage_match.groups()
             name = self.normalize_driver_name(raw_name)
-            if name in self.KNOWN_DRIVERS:
+            if name in known_drivers:
                 events.append(ParsedEvent(
                     event_type=self.EVENT_MILEAGE,
                     time=None,
@@ -499,6 +492,8 @@ class MessageParser:
 if __name__ == "__main__":
     parser = MessageParser()
 
+    test_drivers = {"Косич"}
+
     test_messages = [
         # Старые тесты
         "6.00 начата сборка общего сборочного листа",
@@ -542,10 +537,13 @@ if __name__ == "__main__":
         "Машрут 3 Грабиченко закончил",
         # Формат "выехал ИМЯ мршт" (без номера маршрута)
         "11:47 выехал Роговский мршт ",
+        # Пробег: известный водитель → событие, неизвестный → молча игнорируется
+        "Косич 120 км",
+        "Сегодня проехали 200 км",
     ]
 
     for msg in test_messages:
         print(f"\n--- {msg} ---")
-        events = parser.parse(msg)
+        events = parser.parse(msg, test_drivers)
         for e in events:
             print(f"  {e.event_type}: маршрут={e.route_number}, водитель={e.driver}, время={e.time}")
