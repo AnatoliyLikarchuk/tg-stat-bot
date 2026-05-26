@@ -162,12 +162,12 @@ def find_mileage_blocks(row1: list, row3: list) -> list:
     """Находит блоки месяцев на листе «Пробіг».
 
     row1 — строка меток (M{YYYY-MM} над колонками дней),
-    row3 — строка заголовков («Пробег км», «Расход топл», дни).
-    Возвращает [(индекс_колонки_«Пробег км», метка_месяца), ...].
+    row3 — строка заголовков («Пробіг км», «Витрата палива», дни).
+    Возвращает [(индекс_колонки_«Пробіг км», метка_месяца), ...].
     """
     blocks = []
     for i, header in enumerate(row3):
-        if header != "Пробег км":
+        if header != "Пробіг км":
             continue
         label = row1[i + 2] if i + 2 < len(row1) else ""
         if isinstance(label, str) and label.startswith("M"):

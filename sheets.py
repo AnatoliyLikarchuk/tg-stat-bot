@@ -33,9 +33,9 @@ class SheetsManager:
     MILEAGE_DRIVER_ROWS_RANGE = "B4:B300"  # имена водителей (блоки по городам)
     _MILEAGE_DRIVERS_TTL = 3600  # TTL кэша списка водителей
 
-    MONTH_NAMES_RU = {
-        1: "Январь", 2: "Февраль", 3: "Март", 4: "Апрель", 5: "Май", 6: "Июнь",
-        7: "Июль", 8: "Август", 9: "Сентябрь", 10: "Октябрь", 11: "Ноябрь", 12: "Декабрь",
+    MONTH_NAMES_UA = {
+        1: "Січень", 2: "Лютий", 3: "Березень", 4: "Квітень", 5: "Травень", 6: "Червень",
+        7: "Липень", 8: "Серпень", 9: "Вересень", 10: "Жовтень", 11: "Листопад", 12: "Грудень",
     }
 
     def __init__(self):
@@ -345,7 +345,7 @@ class SheetsManager:
         return total_removed
 
     def backfill_mileage_formulas(self) -> int:
-        """Проставляет формулы «Пробег км»/«Расход топл» всем водителям
+        """Проставляет формулы «Пробіг км»/«Витрата палива» всем водителям
         во всех существующих блоках месяцев листа «Пробіг».
 
         Идемпотентна: ячейки, где формула уже есть, не трогает.
@@ -489,7 +489,7 @@ class SheetsManager:
         """Реализация upsert_mileage без try/except — оборачивается в _with_retry."""
         month_label = f"M{dt:%Y-%m}"
         day_label = dt.strftime("%d.%m.%y")
-        month_title = f"{self.MONTH_NAMES_RU[dt.month]} {dt.year}"
+        month_title = f"{self.MONTH_NAMES_UA[dt.month]} {dt.year}"
 
         driver_rows = self._get_driver_rows()
         driver_row = driver_rows.get(driver)
@@ -633,11 +633,11 @@ class SheetsManager:
                             driver_row: int, km: int):
         """Создаёт новый блок месяца (3 колонки) слева от существующих блоков.
 
-        Структура нового блока: [Пробег км | Расход топл | первый день].
+        Структура нового блока: [Пробіг км | Витрата палива | первый день].
         Старые блоки автоматически уезжают вправо.
         """
         sheet_id = self.mileage_sheet_id
-        # Вставка перед колонкой D (index=3) — сразу после "Расход план"
+        # Вставка перед колонкой D (index=3) — сразу после "Планова витрата на 100км"
         ins = 3
 
         # Формулы для всех строк, где реально есть водитель (а не 4..14).
@@ -675,8 +675,8 @@ class SheetsManager:
                 "range": {"sheetId": sheet_id, "startRowIndex": 0, "endRowIndex": 1,
                           "startColumnIndex": ins, "endColumnIndex": ins + 3},
                 "rows": [{"values": [
-                    {"userEnteredValue": {"stringValue": "Расчёт"}},
-                    {"userEnteredValue": {"stringValue": "Расчёт"}},
+                    {"userEnteredValue": {"stringValue": "Розрахунок"}},
+                    {"userEnteredValue": {"stringValue": "Розрахунок"}},
                     {"userEnteredValue": {"stringValue": month_label}},
                 ]}],
                 "fields": "userEnteredValue",
@@ -693,8 +693,8 @@ class SheetsManager:
                 "range": {"sheetId": sheet_id, "startRowIndex": 2, "endRowIndex": 3,
                           "startColumnIndex": ins, "endColumnIndex": ins + 3},
                 "rows": [{"values": [
-                    {"userEnteredValue": {"stringValue": "Пробег км"}},
-                    {"userEnteredValue": {"stringValue": "Расход топл"}},
+                    {"userEnteredValue": {"stringValue": "Пробіг км"}},
+                    {"userEnteredValue": {"stringValue": "Витрата палива"}},
                     {"userEnteredValue": {"stringValue": day_label}},
                 ]}],
                 "fields": "userEnteredValue",
@@ -740,7 +740,7 @@ class SheetsManager:
                 }},
                 "fields": "userEnteredFormat(backgroundColor,horizontalAlignment,verticalAlignment,textFormat)",
             }},
-            # Колонка "Пробег км" — зелёный + жирный
+            # Колонка "Пробіг км" — зелёный + жирный
             {"repeatCell": {
                 "range": {"sheetId": sheet_id, "startRowIndex": 3, "endRowIndex": 100,
                           "startColumnIndex": ins, "endColumnIndex": ins + 1},
@@ -751,7 +751,7 @@ class SheetsManager:
                 }},
                 "fields": "userEnteredFormat(backgroundColor,horizontalAlignment,textFormat)",
             }},
-            # Колонка "Расход топл" — жёлтый
+            # Колонка "Витрата палива" — жёлтый
             {"repeatCell": {
                 "range": {"sheetId": sheet_id, "startRowIndex": 3, "endRowIndex": 100,
                           "startColumnIndex": ins + 1, "endColumnIndex": ins + 2},
