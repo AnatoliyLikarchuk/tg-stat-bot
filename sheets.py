@@ -373,13 +373,11 @@ class SheetsManager:
                 driver_rows = sorted(self._get_driver_rows().values())
                 sheet_id = self.mileage_sheet_id
                 requests = []
+                filled_count = 0
                 for row_1based in driver_rows:
                     row_idx0 = row_1based - 1
                     existing = grid[row_idx0] if row_idx0 < len(grid) else []
                     for mcol, month_label in blocks:
-                        current = existing[mcol] if mcol < len(existing) else ""
-                        if str(current).strip():
-                            continue  # формула/значение уже есть
                         mileage_formula = (
                             f"=SUMIFS(${row_1based}:${row_1based};"
                             f'$1:$1;"{month_label}")'
@@ -388,26 +386,55 @@ class SheetsManager:
                             "=" + self._col_letter(mcol + 1) + str(row_1based)
                             + "/100*C" + str(row_1based)
                         )
-                        requests.append({"updateCells": {
-                            "range": {"sheetId": sheet_id,
-                                      "startRowIndex": row_idx0,
-                                      "endRowIndex": row_1based,
-                                      "startColumnIndex": mcol,
-                                      "endColumnIndex": mcol + 2},
-                            "rows": [{"values": [
-                                {"userEnteredValue": {"formulaValue": mileage_formula}},
-                                {"userEnteredValue": {"formulaValue": fuel_formula}},
-                            ]}],
-                            "fields": "userEnteredValue",
-                        }})
+
+                        current_mileage = existing[mcol] if mcol < len(existing) else ""
+                        current_fuel = existing[mcol + 1] if mcol + 1 < len(existing) else ""
+                        missing = [
+                            (mcol, mileage_formula, current_mileage),
+                            (mcol + 1, fuel_formula, current_fuel),
+                        ]
+                        start = None
+                        values = []
+                        for col_idx, formula, current in missing:
+                            if str(current).strip():
+                                if values:
+                                    requests.append({"updateCells": {
+                                        "range": {"sheetId": sheet_id,
+                                                  "startRowIndex": row_idx0,
+                                                  "endRowIndex": row_1based,
+                                                  "startColumnIndex": start,
+                                                  "endColumnIndex": col_idx},
+                                        "rows": [{"values": values}],
+                                        "fields": "userEnteredValue",
+                                    }})
+                                    filled_count += len(values)
+                                    start = None
+                                    values = []
+                                continue
+
+                            if start is None:
+                                start = col_idx
+                            values.append({"userEnteredValue": {"formulaValue": formula}})
+
+                        if values:
+                            requests.append({"updateCells": {
+                                "range": {"sheetId": sheet_id,
+                                          "startRowIndex": row_idx0,
+                                          "endRowIndex": row_1based,
+                                          "startColumnIndex": start,
+                                          "endColumnIndex": start + len(values)},
+                                "rows": [{"values": values}],
+                                "fields": "userEnteredValue",
+                            }})
+                            filled_count += len(values)
 
                 if not requests:
                     logger.info("backfill: все формулы уже на месте")
                     return 0
 
                 self.spreadsheet.batch_update({"requests": requests})
-                logger.info(f"backfill: заполнено {len(requests)} строк-формул")
-                return len(requests)
+                logger.info(f"backfill: заполнено {filled_count} формул")
+                return filled_count
             except Exception as e:
                 logger.error(f"Ошибка backfill формул пробега: {e}", exc_info=True)
                 return 0
