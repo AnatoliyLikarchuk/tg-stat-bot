@@ -4,7 +4,8 @@ import bot
 
 
 class FakeMessage:
-    def __init__(self):
+    def __init__(self, text=None):
+        self.text = text
         self.replies = []
 
     async def reply_text(self, text):
@@ -34,4 +35,20 @@ def test_backfill_command_calls_sheets_manager_and_replies(monkeypatch):
     assert message.replies == [
         "⏳ Заповнюю формули пробігу...",
         "✅ Готово. Заповнено формул: 3",
+    ]
+
+
+def test_backfill_reply_button_calls_sheets_manager(monkeypatch):
+    message = FakeMessage(text="🧮 Формули пробігу")
+    update = type("FakeUpdate", (), {"message": message})()
+    manager = FakeSheetsManager(count=2)
+    monkeypatch.setattr(bot, "check_access", lambda update: True)
+    monkeypatch.setattr(bot, "sheets_manager", manager)
+
+    asyncio.run(bot.handle_buttons(update, None))
+
+    assert manager.called is True
+    assert message.replies == [
+        "⏳ Заповнюю формули пробігу...",
+        "✅ Готово. Заповнено формул: 2",
     ]

@@ -26,7 +26,7 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton("📊 Статистика сегодня"), KeyboardButton("📈 За неделю")],
         [KeyboardButton("🚗 Активные маршруты"), KeyboardButton("❓ Помощь")],
-        [KeyboardButton("📏 Километраж за неделю")],
+        [KeyboardButton("📏 Километраж за неделю"), KeyboardButton("🧮 Формули пробігу")],
     ],
     resize_keyboard=True
 )
@@ -37,6 +37,7 @@ BUTTON_LABELS = {
     "🚗 Активные маршруты",
     "❓ Помощь",
     "📏 Километраж за неделю",
+    "🧮 Формули пробігу",
 }
 
 from config import config
@@ -242,6 +243,8 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await help_command(update, context)
     elif text == "📏 Километраж за неделю":
         await mileage_week(update, context)
+    elif text == "🧮 Формули пробігу":
+        await backfill_command(update, context)
 
 
 async def on_city_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -520,7 +523,7 @@ def main():
     # Обработчик кнопок в личных сообщениях
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE &
-        filters.Regex(r"^(📊 Статистика сегодня|📈 За неделю|🚗 Активные маршруты|❓ Помощь|📏 Километраж за неделю)$"),
+        filters.Regex(r"^(📊 Статистика сегодня|📈 За неделю|🚗 Активные маршруты|❓ Помощь|📏 Километраж за неделю|🧮 Формули пробігу)$"),
         handle_buttons
     ))
 
