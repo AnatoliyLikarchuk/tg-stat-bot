@@ -39,7 +39,7 @@ def test_backfill_command_calls_sheets_manager_and_replies(monkeypatch):
 
 
 def test_backfill_reply_button_calls_sheets_manager(monkeypatch):
-    message = FakeMessage(text="🧮 Формули пробігу")
+    message = FakeMessage(text="🧮 Заполнить формулы")
     update = type("FakeUpdate", (), {"message": message})()
     manager = FakeSheetsManager(count=2)
     monkeypatch.setattr(bot, "check_access", lambda update: True)
