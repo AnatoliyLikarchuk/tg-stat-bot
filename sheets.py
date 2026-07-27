@@ -468,7 +468,29 @@ class SheetsManager:
         if self.mileage_sheet is None:
             return {}
 
-        cells = self.mileage_sheet.get_values(self.MILEAGE_DRIVER_ROWS_RANGE)
+        try:
+            cells = self._with_retry(
+                "Чтение списка водителей",
+                lambda: self.mileage_sheet.get_values(
+                    self.MILEAGE_DRIVER_ROWS_RANGE
+                ),
+            )
+        except Exception as e:
+            if self._driver_rows_cache is not None:
+                logger.warning(
+                    "Не удалось обновить список водителей (%s) — "
+                    "используем устаревший кэш из %s записей",
+                    e,
+                    len(self._driver_rows_cache),
+                )
+                return self._driver_rows_cache
+            logger.error(
+                "Не удалось прочитать список водителей, резервного кэша нет: %s",
+                e,
+                exc_info=True,
+            )
+            return {}
+
         result = {}
         for offset, row in enumerate(cells):
             name = (row[0] if row else "").strip()
