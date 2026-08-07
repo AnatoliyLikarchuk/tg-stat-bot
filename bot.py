@@ -12,6 +12,7 @@ from telegram import (
     Update, ReplyKeyboardMarkup, KeyboardButton, ReactionTypeEmoji,
     InlineKeyboardMarkup, InlineKeyboardButton,
 )
+from telegram.error import BadRequest, NetworkError
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -107,6 +108,49 @@ parser = MessageParser()
 # Дедупликация: {(chat_id, event_type, route, driver): timestamp}
 _recent_events: dict = {}
 DEDUP_WINDOW_SEC = 60
+
+# Реакция — подтверждение уже выполненной записи, поэтому её сетевой запрос
+# должен быть коротким, но с несколькими попытками на случай временного сбоя.
+REACTION_RETRY_DELAYS = (1.0, 3.0)
+REACTION_REQUEST_TIMEOUT_SEC = 5.0
+
+
+async def set_saved_reaction(msg) -> bool:
+    """Поставить реакцию-подтверждение с retry при сетевых ошибках Telegram."""
+    attempts = len(REACTION_RETRY_DELAYS) + 1
+
+    for attempt in range(1, attempts + 1):
+        try:
+            await msg.set_reaction(
+                reaction=[ReactionTypeEmoji("🏆")],
+                connect_timeout=REACTION_REQUEST_TIMEOUT_SEC,
+                read_timeout=REACTION_REQUEST_TIMEOUT_SEC,
+                write_timeout=REACTION_REQUEST_TIMEOUT_SEC,
+                pool_timeout=REACTION_REQUEST_TIMEOUT_SEC,
+            )
+            return True
+        except BadRequest as e:
+            # Ошибку прав или валидации повтором не исправить.
+            logger.warning(f"Не удалось поставить реакцию: {e}")
+            return False
+        except NetworkError as e:
+            if attempt == attempts:
+                logger.warning(
+                    f"Не удалось поставить реакцию после {attempts} попыток: {e}"
+                )
+                return False
+
+            delay = REACTION_RETRY_DELAYS[attempt - 1]
+            logger.warning(
+                f"Не удалось поставить реакцию "
+                f"(попытка {attempt}/{attempts}): {e}; retry через {delay:g}с"
+            )
+            await asyncio.sleep(delay)
+        except Exception as e:
+            logger.warning(f"Не удалось поставить реакцию: {e}")
+            return False
+
+    return False
 
 
 def check_access(update: Update) -> bool:
@@ -404,10 +448,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if saved > 0:
         logger.info(f"Сохранено {saved} событий из группы '{group_name}'")
         # Ставим реакцию 🏆 как подтверждение записи
-        try:
-            await msg.set_reaction(reaction=[ReactionTypeEmoji("🏆")])
-        except Exception as e:
-            logger.warning(f"Не удалось поставить реакцию: {e}")
+        await set_saved_reaction(msg)
 
         if not full_stats:
             return  # mileage-only чат — статистику маршрутов не ведём
