@@ -12,3 +12,16 @@ def test_mileage_accepts_fedorov_with_e_and_yo():
         assert events[0].event_type == MessageParser.EVENT_MILEAGE
         assert events[0].driver == "Федоров"
         assert events[0].mileage_km == 123
+
+
+def test_mileage_accepts_popovych_in_russian_and_ukrainian():
+    parser = MessageParser()
+    known_drivers = {"Попович"}
+
+    for raw_name in ("Попович", "Поповіч"):
+        events = parser.parse(f"{raw_name} 123 км", known_drivers)
+
+        assert len(events) == 1
+        assert events[0].event_type == MessageParser.EVENT_MILEAGE
+        assert events[0].driver == "Попович"
+        assert events[0].mileage_km == 123
