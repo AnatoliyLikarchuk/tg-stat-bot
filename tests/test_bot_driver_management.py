@@ -136,6 +136,22 @@ def test_driver_button_and_inline_menu_are_available(monkeypatch):
     ]
 
 
+def test_help_describes_current_driver_and_mileage_workflow(monkeypatch):
+    manager = FakeSheetsManager()
+    allow_driver_ui(monkeypatch, manager)
+    context = FakeContext()
+    message = FakeMessage("❓ Допомога")
+
+    asyncio.run(bot.handle_buttons(FakeUpdate(message=message), context))
+
+    text = message.replies[-1][0]
+    assert "Косич 120 км" in text
+    assert "Перемістити до звільнених" in text
+    assert "Повернути до чинних" in text
+    assert "🔤 Аліаси" in text
+    assert "Заповнити формули" in text
+
+
 def test_roster_read_failure_is_not_reported_as_an_empty_table(monkeypatch):
     manager = FakeSheetsManager({"ok": False, "active": {}, "archived": {}})
     allow_driver_ui(monkeypatch, manager)
