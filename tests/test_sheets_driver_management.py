@@ -390,6 +390,31 @@ def test_restore_moves_up_and_rewrites_formulas_for_final_row():
         }},
         {"userEnteredValue": {"formulaValue": "=D6/100*C6"}},
     ]
+    assert manager.spreadsheet.payloads[0]["requests"][2] == {
+        "deleteDimension": {"range": {
+            "sheetId": 321,
+            "dimension": "ROWS",
+            "startIndex": 9,
+            "endIndex": 10,
+        }}
+    }
+
+
+def test_restore_keeps_archive_city_heading_when_another_driver_remains():
+    manager = make_manager(_grid(
+        ["Київ", ""],
+        ["1", "Іван", "10"],
+        ["Звільнені", ""],
+        ["Київ", ""],
+        ["2", "Петро", "11"],
+        ["3", "Олег", "12"],
+    ))
+
+    result = manager.restore_mileage_driver("Петро", "Київ")
+
+    assert result == DriverChangeResult(True, "restored", "Петро", "Київ")
+    requests = manager.spreadsheet.payloads[0]["requests"]
+    assert not any("deleteDimension" in request for request in requests)
 
 
 def test_repeated_restore_is_idempotent_and_does_not_write():

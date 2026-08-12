@@ -720,6 +720,15 @@ class SheetsManager:
         }}
 
     @staticmethod
+    def _delete_row_request(sheet_id, row_idx0: int) -> dict:
+        return {"deleteDimension": {"range": {
+            "sheetId": sheet_id,
+            "dimension": "ROWS",
+            "startIndex": row_idx0,
+            "endIndex": row_idx0 + 1,
+        }}}
+
+    @staticmethod
     def _string_cell_request(sheet_id, row_idx0: int, col_idx0: int,
                              value: str) -> dict:
         return {"updateCells": {
@@ -1301,6 +1310,26 @@ class SheetsManager:
                 row3 = grid[2] if len(grid) > 2 else []
                 blocks = core.find_mileage_blocks(row1, row3)
                 requests.extend(self._formula_requests_for_row(final_idx0, blocks))
+
+                # Если это был последний водитель архивного города, после
+                # перемещения удаляем только опустевший городской заголовок.
+                # Общий заголовок «Звільнені» всегда остаётся на месте.
+                archived_city = self._matching_key(
+                    layout.archived, location.city,
+                )
+                archived_drivers = (
+                    layout.archived.get(archived_city, [])
+                    if archived_city is not None else []
+                )
+                if len(archived_drivers) == 1:
+                    heading_idx0 = layout.archived_city_rows[archived_city] - 1
+                    # При обычном движении из нижнего архива вверх заголовок
+                    # сдвигается на строку вниз вслед за вставленным водителем.
+                    if destination_idx0 <= heading_idx0 < source_idx0:
+                        heading_idx0 += 1
+                    requests.append(self._delete_row_request(
+                        sheet_id, heading_idx0,
+                    ))
 
                 batch_attempted = True
                 self._invalidate_driver_rows_cache()
