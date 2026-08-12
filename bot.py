@@ -28,11 +28,10 @@ from telegram.ext import (
 # Клавиатура с командами
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
-        [KeyboardButton("👥 Водії")],
-        [KeyboardButton("📊 Статистика сьогодні"), KeyboardButton("📈 За тиждень")],
-        [KeyboardButton("🚗 Активні маршрути"), KeyboardButton("❓ Допомога")],
-        [KeyboardButton("📏 Кілометраж за тиждень")],
-        [KeyboardButton("🧮 Заповнити формули")],
+        [KeyboardButton("👥 Водії"), KeyboardButton("📊 Статистика сьогодні")],
+        [KeyboardButton("📈 За тиждень"), KeyboardButton("🚗 Активні маршрути")],
+        [KeyboardButton("📏 Кілометраж за тиждень"), KeyboardButton("🧮 Заповнити формули")],
+        [KeyboardButton("❓ Допомога")],
     ],
     resize_keyboard=True
 )

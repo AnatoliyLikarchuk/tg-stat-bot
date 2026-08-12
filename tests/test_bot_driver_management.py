@@ -125,7 +125,8 @@ def test_driver_button_and_inline_menu_are_available(monkeypatch):
 
     assert "👥 Водители" in bot.BUTTON_LABELS
     assert bot.MAIN_KEYBOARD.keyboard[0][0].text == "👥 Водії"
-    assert bot.MAIN_KEYBOARD.keyboard[-1][0].text == "🧮 Заповнити формули"
+    assert all(len(row) == 2 for row in bot.MAIN_KEYBOARD.keyboard[:-1])
+    assert bot.MAIN_KEYBOARD.keyboard[-1][0].text == "❓ Допомога"
     text, markup = message.replies[-1]
     assert "Керування водіями" in text
     assert markup.inline_keyboard[0][0].text == "➕ Додати водія"
