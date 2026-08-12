@@ -124,7 +124,8 @@ def test_driver_button_and_inline_menu_are_available(monkeypatch):
     asyncio.run(bot.handle_buttons(FakeUpdate(message=message), context))
 
     assert "👥 Водители" in bot.BUTTON_LABELS
-    assert bot.MAIN_KEYBOARD.keyboard[-1][0].text == "👥 Водії"
+    assert bot.MAIN_KEYBOARD.keyboard[0][0].text == "👥 Водії"
+    assert bot.MAIN_KEYBOARD.keyboard[-1][0].text == "🧮 Заповнити формули"
     text, markup = message.replies[-1]
     assert "Керування водіями" in text
     assert callback_values(markup) == [
