@@ -144,7 +144,7 @@ def build_driver_menu_keyboard() -> InlineKeyboardMarkup:
 
 def _driver_cancel_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("❌ Скасувати", callback_data="drv|cancel")
+        InlineKeyboardButton("↩️ Скасувати", callback_data="drv|cancel")
     ]])
 
 
@@ -164,7 +164,7 @@ def _driver_choice_keyboard(
         )]
         for idx, label in enumerate(labels)
     ]
-    rows.append([InlineKeyboardButton("❌ Скасувати", callback_data="drv|cancel")])
+    rows.append([InlineKeyboardButton("↩️ Скасувати", callback_data="drv|cancel")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -623,7 +623,7 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                     [InlineKeyboardButton(
                         "✅ Видалити", callback_data=f"drv|alias_remove_confirm|{token}"
                     )],
-                    [InlineKeyboardButton("❌ Скасувати", callback_data="drv|cancel")],
+                    [InlineKeyboardButton("↩️ Скасувати", callback_data="drv|cancel")],
                 ]),
             )
             return
@@ -810,7 +810,7 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         "✅ Перемістити",
                         callback_data=f"drv|archive_confirm|{token}",
                     )],
-                    [InlineKeyboardButton("❌ Скасувати", callback_data="drv|cancel")],
+                    [InlineKeyboardButton("↩️ Скасувати", callback_data="drv|cancel")],
                 ]),
             )
             return
@@ -942,7 +942,7 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                         "✅ Повернути",
                         callback_data=f"drv|restore_confirm|{token}",
                     )],
-                    [InlineKeyboardButton("❌ Скасувати", callback_data="drv|cancel")],
+                    [InlineKeyboardButton("↩️ Скасувати", callback_data="drv|cancel")],
                 ]),
             )
             return
@@ -1081,7 +1081,7 @@ async def continue_driver_text_flow(
                     "✅ Додати",
                     callback_data=f"drv|add_confirm|{token}",
                 )],
-                [InlineKeyboardButton("❌ Скасувати", callback_data="drv|cancel")],
+                [InlineKeyboardButton("↩️ Скасувати", callback_data="drv|cancel")],
             ]),
         )
         return True
@@ -1109,7 +1109,7 @@ async def continue_driver_text_flow(
                     "✅ Додати аліас",
                     callback_data=f"drv|alias_add_confirm|{token}",
                 )],
-                [InlineKeyboardButton("❌ Скасувати", callback_data="drv|cancel")],
+                [InlineKeyboardButton("↩️ Скасувати", callback_data="drv|cancel")],
             ]),
         )
         return True
