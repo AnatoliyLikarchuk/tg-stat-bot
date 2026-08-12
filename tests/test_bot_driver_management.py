@@ -128,6 +128,8 @@ def test_driver_button_and_inline_menu_are_available(monkeypatch):
     assert bot.MAIN_KEYBOARD.keyboard[-1][0].text == "🧮 Заповнити формули"
     text, markup = message.replies[-1]
     assert "Керування водіями" in text
+    assert markup.inline_keyboard[0][0].text == "➕ Додати водія"
+    assert markup.inline_keyboard[1][0].text == "📦 Перемістити до звільнених"
     assert callback_values(markup) == [
         "drv|add", "drv|archive", "drv|restore", "drv|aliases"
     ]

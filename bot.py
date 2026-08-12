@@ -133,8 +133,10 @@ DRIVER_ALIAS_RE = re.compile(r"^[А-ЯІЇЄҐЁ][а-яіїєґё']+$", re.IGNOR
 def build_driver_menu_keyboard() -> InlineKeyboardMarkup:
     """Главное inline-меню управления водителями."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Додати", callback_data="drv|add")],
-        [InlineKeyboardButton("📦 До звільнених", callback_data="drv|archive")],
+        [InlineKeyboardButton("➕ Додати водія", callback_data="drv|add")],
+        [InlineKeyboardButton(
+            "📦 Перемістити до звільнених", callback_data="drv|archive"
+        )],
         [InlineKeyboardButton("♻️ Повернути до чинних", callback_data="drv|restore")],
         [InlineKeyboardButton("🔤 Аліаси", callback_data="drv|aliases")],
     ])
