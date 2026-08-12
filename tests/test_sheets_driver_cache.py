@@ -27,12 +27,12 @@ def make_manager(responses, cache=None):
 def test_driver_rows_retry_transient_google_error():
     manager = make_manager([
         RuntimeError("service unavailable"),
-        [["Будагов"], ["Мельников"]],
+        [["Киев", ""], ["", "Будагов"], ["", "Мельников"]],
     ])
 
     rows = manager._get_driver_rows()
 
-    assert rows == {"Будагов": 4, "Мельников": 5}
+    assert rows == {"Будагов": 5, "Мельников": 6}
     assert manager.mileage_sheet.calls == 2
     assert manager._driver_rows_cache == rows
 

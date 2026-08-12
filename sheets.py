@@ -4,9 +4,11 @@
 """
 
 import logging
+import math
 import time
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -22,6 +24,39 @@ logger = logging.getLogger(__name__)
 TZ = ZoneInfo(config.TIMEZONE)
 
 
+@dataclass(frozen=True)
+class DriverChangeResult:
+    """Результат изменения состава водителей на листе ``Пробіг``."""
+
+    ok: bool
+    code: str
+    driver: str = ""
+    city: str = ""
+
+
+@dataclass(frozen=True)
+class _DriverLocation:
+    """Фактическое положение строки водителя в листе."""
+
+    name: str
+    row: int  # 1-based
+    city: str
+    archived: bool
+
+
+@dataclass
+class _DriverLayout:
+    """Разобранные активные и архивные блоки листа ``Пробіг``."""
+
+    active: dict = field(default_factory=dict)
+    archived: dict = field(default_factory=dict)
+    active_city_rows: dict = field(default_factory=dict)
+    archived_city_rows: dict = field(default_factory=dict)
+    drivers: list = field(default_factory=list)
+    archive_row: Optional[int] = None
+    last_used_row: int = 3
+
+
 class SheetsManager:
     """Менеджер для работы с Google Sheets."""
 
@@ -30,7 +65,9 @@ class SheetsManager:
 
     # Лист пробега водителей. См. формат в /Users/anatoliy/.claude/plans/1-jiggly-treehouse.md
     MILEAGE_SHEET_NAME = "Пробіг"
-    MILEAGE_DRIVER_ROWS_RANGE = "B4:B300"  # имена водителей (блоки по городам)
+    MILEAGE_DRIVER_ROWS_RANGE = "A4:B300"  # заголовки городов + имена водителей
+    MILEAGE_MANAGEMENT_GRID_RANGE = "A1:ZZ300"
+    MILEAGE_ARCHIVE_LABEL = "Уволенные"
     _MILEAGE_DRIVERS_TTL = 3600  # TTL кэша списка водителей
 
     MONTH_NAMES_UA = {
@@ -458,8 +495,256 @@ class SheetsManager:
             s = chr(65 + r) + s
         return s
 
+    @staticmethod
+    def _cell_text(value) -> str:
+        """Безопасно приводит значение ячейки/параметра к тексту."""
+        return str(value).strip() if value is not None else ""
+
+    @classmethod
+    def _parse_driver_layout(cls, cells: list) -> _DriverLayout:
+        """Разбирает ``A4:B300`` на городские блоки и архив.
+
+        Строка с непустой A и пустой B — заголовок города. Первый заголовок
+        ``Уволенные`` переключает разбор в архивный раздел; все последующие
+        заголовки городов относятся уже к архиву.
+        """
+        layout = _DriverLayout()
+        current_city = ""
+        archived = False
+
+        for offset, raw_row in enumerate(cells):
+            row_number = 4 + offset
+            row = list(raw_row or [])
+            col_a = cls._cell_text(row[0] if len(row) > 0 else "")
+            col_b = cls._cell_text(row[1] if len(row) > 1 else "")
+
+            if col_a or col_b:
+                layout.last_used_row = row_number
+
+            if not col_b:
+                if not col_a:
+                    continue
+                if (not archived
+                        and col_a.casefold() == cls.MILEAGE_ARCHIVE_LABEL.casefold()):
+                    archived = True
+                    current_city = ""
+                    layout.archive_row = row_number
+                    continue
+
+                roster = layout.archived if archived else layout.active
+                city_rows = (layout.archived_city_rows
+                             if archived else layout.active_city_rows)
+                current_city = cls._matching_key(roster, col_a) or col_a
+                roster.setdefault(current_city, [])
+                city_rows.setdefault(current_city, row_number)
+                continue
+
+            location = _DriverLocation(
+                name=col_b,
+                row=row_number,
+                city=current_city,
+                archived=archived,
+            )
+            layout.drivers.append(location)
+            if current_city:
+                roster = layout.archived if archived else layout.active
+                roster.setdefault(current_city, []).append(col_b)
+
+        return layout
+
+    @staticmethod
+    def _matching_key(mapping: dict, requested: str) -> Optional[str]:
+        """Возвращает канонический ключ словаря без учёта регистра."""
+        folded = requested.casefold()
+        return next((key for key in mapping if key.casefold() == folded), None)
+
+    @staticmethod
+    def _find_driver(layout: _DriverLayout, driver: str, *,
+                     archived: Optional[bool] = None,
+                     city: Optional[str] = None) -> Optional[_DriverLocation]:
+        folded_driver = driver.casefold()
+        folded_city = city.casefold() if city is not None else None
+        for location in layout.drivers:
+            if archived is not None and location.archived != archived:
+                continue
+            if location.name.casefold() != folded_driver:
+                continue
+            if folded_city is not None and location.city.casefold() != folded_city:
+                continue
+            return location
+        return None
+
+    @staticmethod
+    def _city_end_index(layout: _DriverLayout, city: str, *, archived: bool) -> int:
+        """0-based позиция сразу после блока города (до следующего заголовка)."""
+        city_rows = layout.archived_city_rows if archived else layout.active_city_rows
+        heading_row = city_rows[city]
+        marker_rows = [row for row in city_rows.values() if row > heading_row]
+        if not archived and layout.archive_row and layout.archive_row > heading_row:
+            marker_rows.append(layout.archive_row)
+        if marker_rows:
+            return min(marker_rows) - 1
+        return layout.last_used_row
+
+    def _cache_active_driver_rows(self, layout: _DriverLayout) -> dict:
+        rows = {
+            location.name: location.row
+            for location in layout.drivers
+            if not location.archived
+        }
+        self._driver_rows_cache = rows
+        self._driver_rows_ts = time.time()
+        return rows
+
+    def _invalidate_driver_rows_cache(self):
+        self._driver_rows_cache = None
+        self._driver_rows_ts = 0
+
+    def _read_driver_layout(self) -> _DriverLayout:
+        cells = self._with_retry(
+            "Чтение состава водителей",
+            lambda: self.mileage_sheet.get_values(self.MILEAGE_DRIVER_ROWS_RANGE),
+        )
+        return self._parse_driver_layout(cells)
+
+    def _read_management_grid(self) -> tuple:
+        grid = self._with_retry(
+            "Чтение структуры водителей",
+            lambda: self.mileage_sheet.get_values(
+                self.MILEAGE_MANAGEMENT_GRID_RANGE,
+                value_render_option="FORMULA",
+            ),
+        )
+        driver_cells = [
+            list(row[:2])
+            for row in grid[3:300]
+        ] if len(grid) > 3 else []
+        return grid, self._parse_driver_layout(driver_cells)
+
+    def _mileage_sheet_id_value(self):
+        return getattr(self, "mileage_sheet_id", None) or self.mileage_sheet.id
+
+    @staticmethod
+    def _fuel_rate_value(value) -> Optional[float]:
+        if isinstance(value, bool):
+            return None
+        try:
+            number = float(str(value).strip().replace(",", "."))
+        except (TypeError, ValueError):
+            return None
+        return number if math.isfinite(number) and 0 < number <= 100 else None
+
+    def _formula_requests_for_row(self, row_idx0: int, blocks: list) -> list:
+        """Полностью переписывает расчётные формулы строки водителя."""
+        row_1based = row_idx0 + 1
+        requests = []
+        for mileage_col, month_label in blocks:
+            mileage_formula = (
+                f'=SUMIFS(${row_1based}:${row_1based};$1:$1;"{month_label}")'
+            )
+            fuel_formula = (
+                f"={self._col_letter(mileage_col + 1)}{row_1based}"
+                f"/100*C{row_1based}"
+            )
+            requests.append({"updateCells": {
+                "range": {
+                    "sheetId": self._mileage_sheet_id_value(),
+                    "startRowIndex": row_idx0,
+                    "endRowIndex": row_idx0 + 1,
+                    "startColumnIndex": mileage_col,
+                    "endColumnIndex": mileage_col + 2,
+                },
+                "rows": [{"values": [
+                    {"userEnteredValue": {"formulaValue": mileage_formula}},
+                    {"userEnteredValue": {"formulaValue": fuel_formula}},
+                ]}],
+                "fields": "userEnteredValue",
+            }})
+        return requests
+
+    @staticmethod
+    def _move_row_request(sheet_id, source_idx0: int, destination_idx0: int) -> dict:
+        """Строит moveDimension; destination считается до удаления source."""
+        return {"moveDimension": {
+            "source": {
+                "sheetId": sheet_id,
+                "dimension": "ROWS",
+                "startIndex": source_idx0,
+                "endIndex": source_idx0 + 1,
+            },
+            "destinationIndex": destination_idx0,
+        }}
+
+    @staticmethod
+    def _insert_rows_request(sheet_id, start_idx0: int, count: int) -> dict:
+        return {"insertDimension": {
+            "range": {
+                "sheetId": sheet_id,
+                "dimension": "ROWS",
+                "startIndex": start_idx0,
+                "endIndex": start_idx0 + count,
+            },
+            "inheritFromBefore": False,
+        }}
+
+    @staticmethod
+    def _string_cell_request(sheet_id, row_idx0: int, col_idx0: int,
+                             value: str) -> dict:
+        return {"updateCells": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": row_idx0,
+                "endRowIndex": row_idx0 + 1,
+                "startColumnIndex": col_idx0,
+                "endColumnIndex": col_idx0 + 1,
+            },
+            "rows": [{"values": [{
+                "userEnteredValue": {"stringValue": value},
+            }]}],
+            "fields": "userEnteredValue",
+        }}
+
+    @staticmethod
+    def _copy_row_request(sheet_id, source_idx0: int, destination_idx0: int,
+                          width: int, paste_type: str) -> dict:
+        return {"copyPaste": {
+            "source": {
+                "sheetId": sheet_id,
+                "startRowIndex": source_idx0,
+                "endRowIndex": source_idx0 + 1,
+                "startColumnIndex": 0,
+                "endColumnIndex": width,
+            },
+            "destination": {
+                "sheetId": sheet_id,
+                "startRowIndex": destination_idx0,
+                "endRowIndex": destination_idx0 + 1,
+                "startColumnIndex": 0,
+                "endColumnIndex": width,
+            },
+            "pasteType": paste_type,
+            "pasteOrientation": "NORMAL",
+        }}
+
+    @staticmethod
+    def _archive_header_format_request(sheet_id, row_idx0: int) -> dict:
+        return {"repeatCell": {
+            "range": {
+                "sheetId": sheet_id,
+                "startRowIndex": row_idx0,
+                "endRowIndex": row_idx0 + 1,
+                "startColumnIndex": 0,
+                "endColumnIndex": 3,
+            },
+            "cell": {"userEnteredFormat": {
+                "backgroundColor": {"red": 0.85, "green": 0.85, "blue": 0.85},
+                "textFormat": {"bold": True},
+            }},
+            "fields": "userEnteredFormat(backgroundColor,textFormat)",
+        }}
+
     def _get_driver_rows(self) -> dict:
-        """Возвращает {имя_водителя: row_index_1_based}. Кэш на час."""
+        """Возвращает только активных водителей и их 1-based строки."""
         now = time.time()
         if (self._driver_rows_cache is not None
                 and (now - self._driver_rows_ts) < self._MILEAGE_DRIVERS_TTL):
@@ -469,12 +754,7 @@ class SheetsManager:
             return {}
 
         try:
-            cells = self._with_retry(
-                "Чтение списка водителей",
-                lambda: self.mileage_sheet.get_values(
-                    self.MILEAGE_DRIVER_ROWS_RANGE
-                ),
-            )
+            layout = self._read_driver_layout()
         except Exception as e:
             if self._driver_rows_cache is not None:
                 logger.warning(
@@ -491,23 +771,385 @@ class SheetsManager:
             )
             return {}
 
-        result = {}
-        for offset, row in enumerate(cells):
-            name = (row[0] if row else "").strip()
-            if name:
-                result[name] = 4 + offset  # B4 = строка 4
-        self._driver_rows_cache = result
-        self._driver_rows_ts = now
-        return result
+        return self._cache_active_driver_rows(layout)
+
+    def get_driver_roster(self) -> dict:
+        """Возвращает безопасный для UI состав active/archive по городам."""
+        if self.mileage_sheet is None:
+            return {"ok": False, "active": {}, "archived": {}}
+        with self._mileage_lock:
+            try:
+                layout = self._read_driver_layout()
+                self._cache_active_driver_rows(layout)
+                return {
+                    "ok": True,
+                    "active": {city: list(names) for city, names in layout.active.items()},
+                    "archived": {
+                        city: list(names) for city, names in layout.archived.items()
+                    },
+                }
+            except Exception as e:
+                logger.error("Ошибка чтения состава водителей: %s", e, exc_info=True)
+                return {"ok": False, "active": {}, "archived": {}}
 
     def get_mileage_drivers(self) -> set:
-        """Множество имён водителей из листа «Пробіг» (колонка B).
+        """Множество активных водителей из листа «Пробіг».
 
         Источник правды о валидных водителях для учёта пробега.
         Переиспользует кэш _get_driver_rows() (TTL 1 час). Если лист
         недоступен — возвращает пустое множество.
         """
         return set(self._get_driver_rows().keys())
+
+    def add_mileage_driver(self, city: str, driver: str,
+                           fuel_rate) -> DriverChangeResult:
+        """Добавляет нового водителя в конец активного блока города."""
+        city_name = " ".join(self._cell_text(city).split())
+        driver_name = " ".join(self._cell_text(driver).split())
+        if not city_name:
+            return DriverChangeResult(False, "invalid_city", driver_name, city_name)
+        if not driver_name:
+            return DriverChangeResult(False, "invalid_driver", driver_name, city_name)
+        rate = self._fuel_rate_value(fuel_rate)
+        if rate is None:
+            return DriverChangeResult(False, "invalid_fuel_rate", driver_name, city_name)
+        if self.mileage_sheet is None:
+            return DriverChangeResult(False, "sheet_unavailable", driver_name, city_name)
+
+        batch_attempted = False
+        with self._mileage_lock:
+            try:
+                grid, layout = self._read_management_grid()
+                existing = self._find_driver(layout, driver_name)
+                if existing is not None:
+                    return DriverChangeResult(
+                        False, "duplicate_driver", existing.name, existing.city,
+                    )
+
+                canonical_city = self._matching_key(layout.active, city_name)
+                if canonical_city is None:
+                    return DriverChangeResult(
+                        False, "city_not_found", driver_name, city_name,
+                    )
+
+                sheet_id = self._mileage_sheet_id_value()
+                insert_idx0 = self._city_end_index(
+                    layout, canonical_city, archived=False,
+                )
+                width = max(3, max((len(row) for row in grid), default=3))
+                requests = [self._insert_rows_request(sheet_id, insert_idx0, 1)]
+
+                active_locations = [
+                    location for location in layout.drivers if not location.archived
+                ]
+                same_city = [
+                    location for location in active_locations
+                    if location.city.casefold() == canonical_city.casefold()
+                ]
+                archived_same_city = [
+                    location for location in layout.drivers
+                    if (location.archived
+                        and location.city.casefold() == canonical_city.casefold())
+                ]
+                candidates = (
+                    same_city
+                    or active_locations
+                    or archived_same_city
+                    or layout.drivers
+                )
+                source = min(
+                    candidates,
+                    key=lambda location: abs((location.row - 1) - insert_idx0),
+                    default=None,
+                )
+                if source is not None:
+                    source_idx0 = source.row - 1
+                    if source_idx0 >= insert_idx0:
+                        source_idx0 += 1  # строка сдвинулась после insertDimension
+                    requests.extend([
+                        self._copy_row_request(
+                            sheet_id, source_idx0, insert_idx0, width, "PASTE_FORMAT",
+                        ),
+                        self._copy_row_request(
+                            sheet_id, source_idx0, insert_idx0, width,
+                            "PASTE_DATA_VALIDATION",
+                        ),
+                    ])
+
+                    source_row = grid[source.row - 1] if source.row <= len(grid) else []
+                    source_number = self._cell_text(
+                        source_row[0] if source_row else ""
+                    )
+                    if source_number.startswith("="):
+                        requests.append(self._copy_row_request(
+                            sheet_id, source_idx0, insert_idx0, 1, "PASTE_FORMULA",
+                        ))
+
+                # Имя и норма расхода. Колонку A не трогаем: формула номера
+                # копируется отдельно, а ручная нумерация остаётся человеку.
+                requests.append({"updateCells": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": insert_idx0,
+                        "endRowIndex": insert_idx0 + 1,
+                        "startColumnIndex": 1,
+                        "endColumnIndex": 3,
+                    },
+                    "rows": [{"values": [
+                        {"userEnteredValue": {"stringValue": driver_name}},
+                        {"userEnteredValue": {"numberValue": rate}},
+                    ]}],
+                    "fields": "userEnteredValue",
+                }})
+
+                row1 = grid[0] if len(grid) > 0 else []
+                row3 = grid[2] if len(grid) > 2 else []
+                blocks = core.find_mileage_blocks(row1, row3)
+                requests.extend(self._formula_requests_for_row(insert_idx0, blocks))
+
+                batch_attempted = True
+                self._invalidate_driver_rows_cache()
+                self.spreadsheet.batch_update({"requests": requests})
+                logger.info(
+                    "Добавлен водитель %s в город %s", driver_name, canonical_city,
+                )
+                return DriverChangeResult(
+                    True, "added", driver_name, canonical_city,
+                )
+            except Exception as e:
+                logger.error("Ошибка добавления водителя: %s", e, exc_info=True)
+                # batch_update мог примениться атомарно, а ответ — потеряться.
+                # Не оставляем старые row indexes и пытаемся подтвердить итог.
+                if batch_attempted:
+                    try:
+                        applied_layout = self._read_driver_layout()
+                        applied = self._find_driver(
+                            applied_layout, driver_name,
+                            archived=False, city=city_name,
+                        )
+                        if applied is not None:
+                            return DriverChangeResult(
+                                True, "added", applied.name, applied.city,
+                            )
+                    except Exception:
+                        logger.warning(
+                            "Не удалось подтвердить добавление после ошибки batch",
+                            exc_info=True,
+                        )
+                return DriverChangeResult(
+                    False, "sheets_error", driver_name, city_name,
+                )
+
+    def archive_mileage_driver(self, city: str,
+                               driver: str) -> DriverChangeResult:
+        """Перемещает целую строку активного водителя в нижний архив."""
+        city_name = " ".join(self._cell_text(city).split())
+        driver_name = " ".join(self._cell_text(driver).split())
+        if not city_name:
+            return DriverChangeResult(False, "invalid_city", driver_name, city_name)
+        if not driver_name:
+            return DriverChangeResult(False, "invalid_driver", driver_name, city_name)
+        if self.mileage_sheet is None:
+            return DriverChangeResult(False, "sheet_unavailable", driver_name, city_name)
+
+        batch_attempted = False
+        with self._mileage_lock:
+            try:
+                layout = self._read_driver_layout()
+                already_archived = self._find_driver(
+                    layout, driver_name, archived=True,
+                )
+                if already_archived is not None:
+                    return DriverChangeResult(
+                        False, "already_archived", already_archived.name,
+                        already_archived.city,
+                    )
+
+                canonical_city = self._matching_key(layout.active, city_name)
+                if canonical_city is None:
+                    return DriverChangeResult(
+                        False, "city_not_found", driver_name, city_name,
+                    )
+                location = self._find_driver(
+                    layout, driver_name, archived=False, city=canonical_city,
+                )
+                if location is None:
+                    return DriverChangeResult(
+                        False, "driver_not_found", driver_name, canonical_city,
+                    )
+
+                sheet_id = self._mileage_sheet_id_value()
+                source_idx0 = location.row - 1
+                requests = []
+                archived_city = self._matching_key(layout.archived, canonical_city)
+
+                if archived_city is not None:
+                    # Для движения вниз конец секции — корректный destinationIndex
+                    # до удаления source (Google Sheets сам вычитает одну строку).
+                    destination_idx0 = self._city_end_index(
+                        layout, archived_city, archived=True,
+                    )
+                elif layout.archive_row is not None:
+                    # Добавляем новый архивный подзаголовок в самый низ.
+                    heading_idx0 = layout.last_used_row
+                    requests.extend([
+                        self._insert_rows_request(sheet_id, heading_idx0, 1),
+                        self._string_cell_request(
+                            sheet_id, heading_idx0, 0, canonical_city,
+                        ),
+                    ])
+                    source_heading_idx0 = layout.active_city_rows[canonical_city] - 1
+                    requests.append(self._copy_row_request(
+                        sheet_id, source_heading_idx0, heading_idx0, 3,
+                        "PASTE_FORMAT",
+                    ))
+                    # После вставки заголовок сдвинется вверх на удалённую
+                    # active-строку, а водитель встанет сразу после него.
+                    destination_idx0 = heading_idx0 + 1
+                else:
+                    # Создаём общий архив и подзаголовок исходного города.
+                    archive_idx0 = layout.last_used_row
+                    requests.extend([
+                        self._insert_rows_request(sheet_id, archive_idx0, 2),
+                        self._string_cell_request(
+                            sheet_id, archive_idx0, 0, self.MILEAGE_ARCHIVE_LABEL,
+                        ),
+                        self._archive_header_format_request(sheet_id, archive_idx0),
+                        self._string_cell_request(
+                            sheet_id, archive_idx0 + 1, 0, canonical_city,
+                        ),
+                    ])
+                    source_heading_idx0 = layout.active_city_rows[canonical_city] - 1
+                    requests.append(self._copy_row_request(
+                        sheet_id, source_heading_idx0, archive_idx0 + 1, 3,
+                        "PASTE_FORMAT",
+                    ))
+                    destination_idx0 = archive_idx0 + 2
+
+                requests.append(self._move_row_request(
+                    sheet_id, source_idx0, destination_idx0,
+                ))
+                batch_attempted = True
+                self._invalidate_driver_rows_cache()
+                self.spreadsheet.batch_update({"requests": requests})
+                logger.info(
+                    "Водитель %s перемещён в архив (%s)",
+                    location.name, canonical_city,
+                )
+                return DriverChangeResult(
+                    True, "archived", location.name, canonical_city,
+                )
+            except Exception as e:
+                logger.error("Ошибка архивации водителя: %s", e, exc_info=True)
+                if batch_attempted:
+                    try:
+                        applied_layout = self._read_driver_layout()
+                        applied = self._find_driver(
+                            applied_layout, driver_name, archived=True,
+                        )
+                        if applied is not None:
+                            return DriverChangeResult(
+                                True, "archived", applied.name, applied.city,
+                            )
+                    except Exception:
+                        logger.warning(
+                            "Не удалось подтвердить архивацию после ошибки batch",
+                            exc_info=True,
+                        )
+                return DriverChangeResult(
+                    False, "sheets_error", driver_name, city_name,
+                )
+
+    def restore_mileage_driver(self, driver: str,
+                               target_city: str) -> DriverChangeResult:
+        """Возвращает архивную строку в конец выбранного активного города."""
+        driver_name = " ".join(self._cell_text(driver).split())
+        city_name = " ".join(self._cell_text(target_city).split())
+        if not driver_name:
+            return DriverChangeResult(False, "invalid_driver", driver_name, city_name)
+        if not city_name:
+            return DriverChangeResult(False, "invalid_city", driver_name, city_name)
+        if self.mileage_sheet is None:
+            return DriverChangeResult(False, "sheet_unavailable", driver_name, city_name)
+
+        batch_attempted = False
+        with self._mileage_lock:
+            try:
+                grid, layout = self._read_management_grid()
+                already_active = self._find_driver(
+                    layout, driver_name, archived=False,
+                )
+                if already_active is not None:
+                    return DriverChangeResult(
+                        False, "already_active", already_active.name,
+                        already_active.city,
+                    )
+
+                location = self._find_driver(
+                    layout, driver_name, archived=True,
+                )
+                if location is None:
+                    return DriverChangeResult(
+                        False, "driver_not_found", driver_name, city_name,
+                    )
+                canonical_city = self._matching_key(layout.active, city_name)
+                if canonical_city is None:
+                    return DriverChangeResult(
+                        False, "city_not_found", location.name, city_name,
+                    )
+
+                sheet_id = self._mileage_sheet_id_value()
+                source_idx0 = location.row - 1
+                destination_idx0 = self._city_end_index(
+                    layout, canonical_city, archived=False,
+                )
+                requests = [self._move_row_request(
+                    sheet_id, source_idx0, destination_idx0,
+                )]
+
+                # При движении вверх destinationIndex и есть финальная строка.
+                # Общая формула ниже также корректна для повреждённой разметки,
+                # где source внезапно оказался выше destination.
+                final_idx0 = (
+                    destination_idx0 - 1
+                    if source_idx0 < destination_idx0 else destination_idx0
+                )
+                row1 = grid[0] if len(grid) > 0 else []
+                row3 = grid[2] if len(grid) > 2 else []
+                blocks = core.find_mileage_blocks(row1, row3)
+                requests.extend(self._formula_requests_for_row(final_idx0, blocks))
+
+                batch_attempted = True
+                self._invalidate_driver_rows_cache()
+                self.spreadsheet.batch_update({"requests": requests})
+                logger.info(
+                    "Водитель %s восстановлен в город %s",
+                    location.name, canonical_city,
+                )
+                return DriverChangeResult(
+                    True, "restored", location.name, canonical_city,
+                )
+            except Exception as e:
+                logger.error("Ошибка восстановления водителя: %s", e, exc_info=True)
+                if batch_attempted:
+                    try:
+                        applied_layout = self._read_driver_layout()
+                        applied = self._find_driver(
+                            applied_layout, driver_name,
+                            archived=False, city=city_name,
+                        )
+                        if applied is not None:
+                            return DriverChangeResult(
+                                True, "restored", applied.name, applied.city,
+                            )
+                    except Exception:
+                        logger.warning(
+                            "Не удалось подтвердить восстановление после ошибки batch",
+                            exc_info=True,
+                        )
+                return DriverChangeResult(
+                    False, "sheets_error", driver_name, city_name,
+                )
 
     def upsert_mileage(self, driver: str, km: int, dt: datetime) -> bool:
         """Записывает пробег водителя за день в лист 'Пробіг'.

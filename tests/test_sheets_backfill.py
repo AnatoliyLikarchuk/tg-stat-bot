@@ -45,7 +45,7 @@ def test_backfill_fills_missing_fuel_formula_when_mileage_formula_exists():
             ["№", "Водій", "Планова витрата", "Пробіг км", "Витрата палива", "16.05.26"],
             ["", "Іван", "10", '=SUMIFS($4:$4;$1:$1;"M2026-05")', "", "120"],
         ],
-        [["Іван"]],
+        [["", "Іван"]],
     )
 
     count = SheetsManager.backfill_mileage_formulas(manager)

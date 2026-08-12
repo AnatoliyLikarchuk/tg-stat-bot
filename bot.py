@@ -5,8 +5,11 @@ Telegram-бот для сбора статистики логистики.
 
 import asyncio
 import logging
+import re
+import secrets
 import time as time_module
 from datetime import datetime, timedelta
+from typing import Optional
 import pytz
 from telegram import (
     Update, ReplyKeyboardMarkup, KeyboardButton, ReactionTypeEmoji,
@@ -28,6 +31,7 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
         [KeyboardButton("📊 Статистика сегодня"), KeyboardButton("📈 За неделю")],
         [KeyboardButton("🚗 Активные маршруты"), KeyboardButton("❓ Помощь")],
         [KeyboardButton("📏 Километраж за неделю"), KeyboardButton("🧮 Заполнить формулы")],
+        [KeyboardButton("👥 Водители")],
     ],
     resize_keyboard=True
 )
@@ -39,6 +43,7 @@ BUTTON_LABELS = {
     "❓ Помощь",
     "📏 Километраж за неделю",
     "🧮 Заполнить формулы",
+    "👥 Водители",
 }
 
 from config import config
@@ -104,6 +109,130 @@ logger = logging.getLogger(__name__)
 
 # Инициализация парсера
 parser = MessageParser()
+
+# Состояние диалога управления водителями хранится только в user_data.
+# Так кадровые кнопки не влияют на обычный парсинг групповых сообщений.
+DRIVER_FLOW_KEY = "driver_management_flow"
+DRIVER_UNDO_KEY = "driver_management_undo"
+DRIVER_UNDO_LIMIT = 5
+DRIVER_NAME_RE = re.compile(r"^[А-ЯІЇЄҐЁ][а-яіїєґё']+$", re.IGNORECASE)
+
+
+def build_driver_menu_keyboard() -> InlineKeyboardMarkup:
+    """Главное inline-меню управления водителями."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("➕ Добавить", callback_data="drv|add")],
+        [InlineKeyboardButton("📦 В уволенные", callback_data="drv|archive")],
+        [InlineKeyboardButton("♻️ Вернуть в действующие", callback_data="drv|restore")],
+    ])
+
+
+def _driver_cancel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("❌ Отмена", callback_data="drv|cancel")
+    ]])
+
+
+def _driver_menu_return_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("👥 К водителям", callback_data="drv|menu")
+    ]])
+
+
+def _driver_choice_keyboard(
+    labels: list[str], callback_action: str, token: str
+) -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(
+            label,
+            callback_data=f"drv|{callback_action}|{token}|{idx}",
+        )]
+        for idx, label in enumerate(labels)
+    ]
+    rows.append([InlineKeyboardButton("❌ Отмена", callback_data="drv|cancel")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _clear_driver_flow(context: ContextTypes.DEFAULT_TYPE):
+    user_data = getattr(context, "user_data", None)
+    if isinstance(user_data, dict):
+        user_data.pop(DRIVER_FLOW_KEY, None)
+
+
+def _get_driver_flow(context: ContextTypes.DEFAULT_TYPE) -> Optional[dict]:
+    user_data = getattr(context, "user_data", None)
+    if not isinstance(user_data, dict):
+        return None
+    flow = user_data.get(DRIVER_FLOW_KEY)
+    return flow if isinstance(flow, dict) else None
+
+
+def _set_driver_flow(context: ContextTypes.DEFAULT_TYPE, **flow) -> str:
+    token = secrets.token_hex(4)
+    flow["token"] = token
+    context.user_data[DRIVER_FLOW_KEY] = flow
+    return token
+
+
+def _get_driver_roster() -> dict:
+    """Возвращает безопасную копию двух разделов roster-контракта."""
+    roster = sheets_manager.get_driver_roster() or {}
+    active = roster.get("active") if isinstance(roster, dict) else {}
+    archived = roster.get("archived") if isinstance(roster, dict) else {}
+    return {
+        "ok": bool(roster.get("ok", True)) if isinstance(roster, dict) else False,
+        "active": active if isinstance(active, dict) else {},
+        "archived": archived if isinstance(archived, dict) else {},
+    }
+
+
+def _format_fuel_rate(rate: float) -> str:
+    return f"{rate:g}".replace(".", ",")
+
+
+def _driver_result_error(code: str) -> str:
+    messages = {
+        "sheet_unavailable": "Таблица сейчас недоступна. Попробуй ещё раз позже.",
+        "invalid_city": "Город не прошёл проверку. Открой меню и выбери его заново.",
+        "invalid_driver": "Фамилия не прошла проверку.",
+        "invalid_fuel_rate": "Норма расхода должна быть больше 0 и не больше 100 л/100 км.",
+        "duplicate_driver": "Такой водитель уже есть в таблице — в действующих или уволенных.",
+        "city_not_found": "Город больше не найден. Обнови меню и повтори действие.",
+        "driver_not_found": "Водитель больше не найден. Возможно, список уже изменился.",
+        "already_archived": "Водитель уже находится в уволенных.",
+        "already_active": "Водитель уже вернут в действующие.",
+        "sheets_error": (
+            "Не удалось подтвердить операцию в Google Sheets. "
+            "Открой меню и проверь актуальный список."
+        ),
+    }
+    return messages.get(code, "Не удалось выполнить операцию. Попробуй ещё раз.")
+
+
+def _remember_driver_undo(context: ContextTypes.DEFAULT_TYPE, driver: str, city: str) -> str:
+    undo_actions = context.user_data.setdefault(DRIVER_UNDO_KEY, {})
+    if not isinstance(undo_actions, dict):
+        undo_actions = {}
+        context.user_data[DRIVER_UNDO_KEY] = undo_actions
+
+    # Старая кнопка того же водителя не должна отменить его
+    # более позднее, уже другое перемещение.
+    stale_driver_tokens = [
+        old_token for old_token, old_action in undo_actions.items()
+        if isinstance(old_action, dict) and old_action.get("driver") == driver
+    ]
+    for old_token in stale_driver_tokens:
+        del undo_actions[old_token]
+
+    token = secrets.token_hex(4)
+    while token in undo_actions:
+        token = secrets.token_hex(4)
+    undo_actions[token] = {"driver": driver, "city": city}
+
+    while len(undo_actions) > DRIVER_UNDO_LIMIT:
+        oldest = next(iter(undo_actions))
+        del undo_actions[oldest]
+    return token
 
 # Дедупликация: {(chat_id, event_type, route, driver): timestamp}
 _recent_events: dict = {}
@@ -190,6 +319,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Выезд маршрута\n"
         "• Завершение маршрута\n"
         "• Проблемы доставки\n\n"
+        "В личном меню «👥 Водители» можно добавить водителя, "
+        "переместить его в уволенные или вернуть обратно.\n\n"
         "Добавь бота в группу логистики, и он будет автоматически "
         "парсить сообщения и сохранять статистику."
     )
@@ -261,12 +392,522 @@ async def mileage_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 
+async def show_driver_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Открывает меню водителей и завершает незаконченный диалог."""
+    _clear_driver_flow(context)
+    await update.message.reply_text(
+        "👥 Управление водителями\n\nЧто нужно сделать?",
+        reply_markup=build_driver_menu_keyboard(),
+    )
+
+
+async def _stale_driver_callback(query, context: ContextTypes.DEFAULT_TYPE):
+    _clear_driver_flow(context)
+    await query.edit_message_text(
+        "Это меню устарело. Открой новое и повтори действие.",
+        reply_markup=_driver_menu_return_keyboard(),
+    )
+
+
+def _flow_matches(
+    flow: Optional[dict], action: str, step: str, token: Optional[str] = None
+) -> bool:
+    if not flow or flow.get("action") != action or flow.get("step") != step:
+        return False
+    if token is None:
+        return True
+    stored_token = flow.get("token")
+    return (
+        isinstance(stored_token, str)
+        and secrets.compare_digest(stored_token, token)
+    )
+
+
+async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Inline-диалог добавления, архивации, возврата и undo."""
+    query = update.callback_query
+    if not config.is_user_allowed(query.from_user.id):
+        await query.answer("⛔ Доступ запрещён", show_alert=True)
+        return
+
+    chat = update.effective_chat
+    if chat is not None and getattr(chat, "type", "private") != "private":
+        await query.answer("Управление водителями доступно только в личке", show_alert=True)
+        return
+
+    await query.answer()
+    parts = (query.data or "").split("|")
+    action = parts[1] if len(parts) > 1 else ""
+
+    try:
+        if action == "menu":
+            _clear_driver_flow(context)
+            await query.edit_message_text(
+                "👥 Управление водителями\n\nЧто нужно сделать?",
+                reply_markup=build_driver_menu_keyboard(),
+            )
+            return
+
+        if action == "cancel":
+            _clear_driver_flow(context)
+            await query.edit_message_text(
+                "Действие отменено.",
+                reply_markup=_driver_menu_return_keyboard(),
+            )
+            return
+
+        if action == "add":
+            roster = await asyncio.to_thread(_get_driver_roster)
+            if not roster["ok"]:
+                _clear_driver_flow(context)
+                await query.edit_message_text(
+                    "Таблица сейчас недоступна. Попробуй ещё раз позже.",
+                    reply_markup=_driver_menu_return_keyboard(),
+                )
+                return
+            cities = sorted(str(city) for city in roster["active"] if str(city).strip())
+            if not cities:
+                _clear_driver_flow(context)
+                await query.edit_message_text(
+                    "В таблице не найдено ни одного активного города.",
+                    reply_markup=_driver_menu_return_keyboard(),
+                )
+                return
+            token = _set_driver_flow(
+                context, action="add", step="choose_city", cities=cities
+            )
+            await query.edit_message_text(
+                "➕ В какой город добавить водителя?",
+                reply_markup=_driver_choice_keyboard(cities, "add_city", token),
+            )
+            return
+
+        if action == "add_city":
+            flow = _get_driver_flow(context)
+            if (len(parts) != 4
+                    or not _flow_matches(flow, "add", "choose_city", parts[2])):
+                await _stale_driver_callback(query, context)
+                return
+            try:
+                city = flow["cities"][int(parts[3])]
+            except (ValueError, IndexError, KeyError, TypeError):
+                await _stale_driver_callback(query, context)
+                return
+            _set_driver_flow(context, action="add", step="driver", city=city)
+            await query.edit_message_text(
+                f"➕ Город: {city}\n\n"
+                "Введи одну фамилию кириллицей, без пробелов и дефисов.",
+                reply_markup=_driver_cancel_keyboard(),
+            )
+            return
+
+        if action == "add_confirm":
+            flow = _get_driver_flow(context)
+            if (len(parts) != 3
+                    or not _flow_matches(flow, "add", "confirm", parts[2])):
+                await _stale_driver_callback(query, context)
+                return
+            result = await asyncio.to_thread(
+                sheets_manager.add_mileage_driver,
+                flow["city"], flow["driver"], flow["fuel_rate"],
+            )
+            code = getattr(result, "code", "")
+            if getattr(result, "ok", False) and code == "added":
+                driver = getattr(result, "driver", None) or flow["driver"]
+                city = getattr(result, "city", None) or flow["city"]
+                rate = _format_fuel_rate(flow["fuel_rate"])
+                _clear_driver_flow(context)
+                await query.edit_message_text(
+                    f"✅ {driver} добавлен в {city}.\n"
+                    f"Норма: {rate} л/100 км.",
+                    reply_markup=_driver_menu_return_keyboard(),
+                )
+                return
+            _clear_driver_flow(context)
+            await query.edit_message_text(
+                f"⚠️ {_driver_result_error(code)}",
+                reply_markup=_driver_menu_return_keyboard(),
+            )
+            return
+
+        if action == "archive":
+            roster = await asyncio.to_thread(_get_driver_roster)
+            if not roster["ok"]:
+                _clear_driver_flow(context)
+                await query.edit_message_text(
+                    "Таблица сейчас недоступна. Попробуй ещё раз позже.",
+                    reply_markup=_driver_menu_return_keyboard(),
+                )
+                return
+            drivers_by_city = {
+                str(city): sorted(str(driver) for driver in drivers if str(driver).strip())
+                for city, drivers in roster["active"].items()
+                if isinstance(drivers, (list, tuple)) and drivers
+            }
+            cities = sorted(city for city, drivers in drivers_by_city.items() if drivers)
+            if not cities:
+                _clear_driver_flow(context)
+                await query.edit_message_text(
+                    "В таблице нет действующих водителей.",
+                    reply_markup=_driver_menu_return_keyboard(),
+                )
+                return
+            token = _set_driver_flow(
+                context, action="archive", step="choose_city",
+                cities=cities, drivers_by_city=drivers_by_city,
+            )
+            await query.edit_message_text(
+                "📦 Из какого города переместить водителя?",
+                reply_markup=_driver_choice_keyboard(
+                    cities, "archive_city", token
+                ),
+            )
+            return
+
+        if action == "archive_city":
+            flow = _get_driver_flow(context)
+            if (len(parts) != 4
+                    or not _flow_matches(
+                        flow, "archive", "choose_city", parts[2]
+                    )):
+                await _stale_driver_callback(query, context)
+                return
+            try:
+                city = flow["cities"][int(parts[3])]
+                drivers = flow["drivers_by_city"][city]
+            except (ValueError, IndexError, KeyError, TypeError):
+                await _stale_driver_callback(query, context)
+                return
+            token = _set_driver_flow(
+                context, action="archive", step="choose_driver",
+                city=city, drivers=drivers,
+            )
+            await query.edit_message_text(
+                f"📦 {city}: кого переместить в уволенные?",
+                reply_markup=_driver_choice_keyboard(
+                    drivers, "archive_driver", token
+                ),
+            )
+            return
+
+        if action == "archive_driver":
+            flow = _get_driver_flow(context)
+            if (len(parts) != 4
+                    or not _flow_matches(
+                        flow, "archive", "choose_driver", parts[2]
+                    )):
+                await _stale_driver_callback(query, context)
+                return
+            try:
+                driver = flow["drivers"][int(parts[3])]
+            except (ValueError, IndexError, KeyError, TypeError):
+                await _stale_driver_callback(query, context)
+                return
+            token = _set_driver_flow(
+                context, action="archive", step="confirm",
+                city=flow["city"], driver=driver,
+            )
+            await query.edit_message_text(
+                f"Переместить {driver} из {flow['city']} в «Уволенные»?\n\n"
+                "История и формулы сохранятся.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton(
+                        "✅ Переместить",
+                        callback_data=f"drv|archive_confirm|{token}",
+                    )],
+                    [InlineKeyboardButton("❌ Отмена", callback_data="drv|cancel")],
+                ]),
+            )
+            return
+
+        if action == "archive_confirm":
+            flow = _get_driver_flow(context)
+            if (len(parts) != 3
+                    or not _flow_matches(flow, "archive", "confirm", parts[2])):
+                await _stale_driver_callback(query, context)
+                return
+            result = await asyncio.to_thread(
+                sheets_manager.archive_mileage_driver,
+                flow["city"], flow["driver"],
+            )
+            code = getattr(result, "code", "")
+            if getattr(result, "ok", False) and code == "archived":
+                driver = getattr(result, "driver", None) or flow["driver"]
+                city = getattr(result, "city", None) or flow["city"]
+                token = _remember_driver_undo(context, driver, city)
+                _clear_driver_flow(context)
+                await query.edit_message_text(
+                    f"✅ {driver} перемещён в «Уволенные».\n"
+                    f"Исходный город: {city}.",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("↩️ Отменить", callback_data=f"drv|undo|{token}")],
+                        [InlineKeyboardButton("👥 К водителям", callback_data="drv|menu")],
+                    ]),
+                )
+                return
+            _clear_driver_flow(context)
+            await query.edit_message_text(
+                f"⚠️ {_driver_result_error(code)}",
+                reply_markup=_driver_menu_return_keyboard(),
+            )
+            return
+
+        if action == "restore":
+            roster = await asyncio.to_thread(_get_driver_roster)
+            if not roster["ok"]:
+                _clear_driver_flow(context)
+                await query.edit_message_text(
+                    "Таблица сейчас недоступна. Попробуй ещё раз позже.",
+                    reply_markup=_driver_menu_return_keyboard(),
+                )
+                return
+            entries = [
+                {"original_city": str(city), "driver": str(driver)}
+                for city, drivers in roster["archived"].items()
+                if isinstance(drivers, (list, tuple))
+                for driver in drivers
+                if str(driver).strip()
+            ]
+            entries.sort(key=lambda item: (item["original_city"], item["driver"]))
+            if not entries:
+                _clear_driver_flow(context)
+                await query.edit_message_text(
+                    "Список уволенных водителей пуст.",
+                    reply_markup=_driver_menu_return_keyboard(),
+                )
+                return
+            labels = [f"{item['driver']} — {item['original_city']}" for item in entries]
+            active_cities = sorted(str(city) for city in roster["active"] if str(city).strip())
+            token = _set_driver_flow(
+                context, action="restore", step="choose_driver",
+                entries=entries, active_cities=active_cities,
+            )
+            await query.edit_message_text(
+                "♻️ Кого вернуть в действующие?",
+                reply_markup=_driver_choice_keyboard(
+                    labels, "restore_driver", token
+                ),
+            )
+            return
+
+        if action == "restore_driver":
+            flow = _get_driver_flow(context)
+            if (len(parts) != 4
+                    or not _flow_matches(
+                        flow, "restore", "choose_driver", parts[2]
+                    )):
+                await _stale_driver_callback(query, context)
+                return
+            try:
+                entry = flow["entries"][int(parts[3])]
+            except (ValueError, IndexError, KeyError, TypeError):
+                await _stale_driver_callback(query, context)
+                return
+            original_city = entry["original_city"]
+            targets = [original_city]
+            targets.extend(city for city in flow["active_cities"] if city != original_city)
+            token = _set_driver_flow(
+                context, action="restore", step="choose_city",
+                driver=entry["driver"], original_city=original_city, targets=targets,
+            )
+            labels = [
+                f"{city} (исходный)" if city == original_city else city
+                for city in targets
+            ]
+            await query.edit_message_text(
+                f"Куда вернуть {entry['driver']}?",
+                reply_markup=_driver_choice_keyboard(
+                    labels, "restore_city", token
+                ),
+            )
+            return
+
+        if action == "restore_city":
+            flow = _get_driver_flow(context)
+            if (len(parts) != 4
+                    or not _flow_matches(
+                        flow, "restore", "choose_city", parts[2]
+                    )):
+                await _stale_driver_callback(query, context)
+                return
+            try:
+                target_city = flow["targets"][int(parts[3])]
+            except (ValueError, IndexError, KeyError, TypeError):
+                await _stale_driver_callback(query, context)
+                return
+            token = _set_driver_flow(
+                context, action="restore", step="confirm",
+                driver=flow["driver"], original_city=flow["original_city"],
+                target_city=target_city,
+            )
+            await query.edit_message_text(
+                f"Вернуть {flow['driver']} в действующие города {target_city}?",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton(
+                        "✅ Вернуть",
+                        callback_data=f"drv|restore_confirm|{token}",
+                    )],
+                    [InlineKeyboardButton("❌ Отмена", callback_data="drv|cancel")],
+                ]),
+            )
+            return
+
+        if action == "restore_confirm":
+            flow = _get_driver_flow(context)
+            if (len(parts) != 3
+                    or not _flow_matches(flow, "restore", "confirm", parts[2])):
+                await _stale_driver_callback(query, context)
+                return
+            result = await asyncio.to_thread(
+                sheets_manager.restore_mileage_driver,
+                flow["driver"], flow["target_city"],
+            )
+            code = getattr(result, "code", "")
+            if (getattr(result, "ok", False) and code == "restored") or code == "already_active":
+                driver = getattr(result, "driver", None) or flow["driver"]
+                city = getattr(result, "city", None) or flow["target_city"]
+                _clear_driver_flow(context)
+                text = (
+                    f"✅ {driver} вернут в действующие. Город: {city}."
+                    if code == "restored"
+                    else f"ℹ️ {driver} уже в действующих. Город: {city}."
+                )
+                await query.edit_message_text(
+                    text,
+                    reply_markup=_driver_menu_return_keyboard(),
+                )
+                return
+            _clear_driver_flow(context)
+            await query.edit_message_text(
+                f"⚠️ {_driver_result_error(code)}",
+                reply_markup=_driver_menu_return_keyboard(),
+            )
+            return
+
+        if action == "undo":
+            token = parts[2] if len(parts) == 3 else ""
+            undo_actions = context.user_data.get(DRIVER_UNDO_KEY, {})
+            undo = undo_actions.get(token) if isinstance(undo_actions, dict) else None
+            if not isinstance(undo, dict):
+                await query.edit_message_text(
+                    "Эта кнопка отмены устарела или уже недействительна.",
+                    reply_markup=_driver_menu_return_keyboard(),
+                )
+                return
+            result = await asyncio.to_thread(
+                sheets_manager.restore_mileage_driver,
+                undo["driver"], undo["city"],
+            )
+            code = getattr(result, "code", "")
+            if (getattr(result, "ok", False) and code == "restored") or code == "already_active":
+                driver = getattr(result, "driver", None) or undo["driver"]
+                city = getattr(result, "city", None) or undo["city"]
+                prefix = "↩️" if code == "restored" else "ℹ️"
+                text = (
+                    f"{prefix} Перемещение отменено: {driver} вернут в {city}."
+                    if code == "restored"
+                    else f"{prefix} {driver} уже в действующих. Повторная отмена не требуется."
+                )
+                await query.edit_message_text(text, reply_markup=_driver_menu_return_keyboard())
+                return
+            await query.edit_message_text(
+                f"⚠️ {_driver_result_error(code)}",
+                reply_markup=_driver_menu_return_keyboard(),
+            )
+            return
+
+        await _stale_driver_callback(query, context)
+    except Exception as exc:
+        logger.exception("Ошибка в меню управления водителями: %s", exc)
+        _clear_driver_flow(context)
+        await query.edit_message_text(
+            "⚠️ Не удалось завершить действие в интерфейсе. "
+            "Открой меню и проверь актуальный список.",
+            reply_markup=_driver_menu_return_keyboard(),
+        )
+
+
+async def continue_driver_text_flow(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> bool:
+    """Продолжает текстовые шаги добавления; True — текст уже обработан."""
+    flow = _get_driver_flow(context)
+    if not flow:
+        return False
+
+    if _flow_matches(flow, "add", "driver"):
+        raw_driver = (update.message.text or "").strip()
+        if not DRIVER_NAME_RE.fullmatch(raw_driver):
+            await update.message.reply_text(
+                "⚠️ Нужна одна фамилия кириллицей, без пробелов и дефисов. Попробуй ещё раз.",
+                reply_markup=_driver_cancel_keyboard(),
+            )
+            return True
+        driver = parser.normalize_driver_name(raw_driver)
+        _set_driver_flow(
+            context, action="add", step="fuel_rate",
+            city=flow["city"], driver=driver,
+        )
+        await update.message.reply_text(
+            f"Водитель: {driver}.\n\n"
+            "Введи норму расхода в л/100 км — число от 0 до 100. "
+            "Можно с запятой, например 12,5.",
+            reply_markup=_driver_cancel_keyboard(),
+        )
+        return True
+
+    if _flow_matches(flow, "add", "fuel_rate"):
+        raw_rate = (update.message.text or "").strip()
+        if not re.fullmatch(r"\d+(?:[.,]\d+)?", raw_rate):
+            rate = None
+        else:
+            try:
+                rate = float(raw_rate.replace(",", "."))
+            except ValueError:
+                rate = None
+        if rate is None or not 0 < rate <= 100:
+            await update.message.reply_text(
+                "⚠️ Введи число больше 0 и не больше 100, например 12,5.",
+                reply_markup=_driver_cancel_keyboard(),
+            )
+            return True
+        token = _set_driver_flow(
+            context, action="add", step="confirm",
+            city=flow["city"], driver=flow["driver"], fuel_rate=rate,
+        )
+        await update.message.reply_text(
+            "Проверь данные:\n\n"
+            f"• Город: {flow['city']}\n"
+            f"• Водитель: {flow['driver']}\n"
+            f"• Норма: {_format_fuel_rate(rate)} л/100 км",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(
+                    "✅ Добавить",
+                    callback_data=f"drv|add_confirm|{token}",
+                )],
+                [InlineKeyboardButton("❌ Отмена", callback_data="drv|cancel")],
+            ]),
+        )
+        return True
+
+    await update.message.reply_text(
+        "Продолжи выбор с помощью inline-кнопок выше или отмени действие.",
+        reply_markup=_driver_cancel_keyboard(),
+    )
+    return True
+
+
 async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик нажатий на reply-кнопки в личке."""
     if not check_access(update):
         await access_denied(update)
         return
     text = update.message.text
+
+    # Любая другая reply-кнопка — явный выход из незаконченного
+    # кадрового диалога, чтобы следующий текст не стал фамилией/расходом.
+    if text != "👥 Водители":
+        _clear_driver_flow(context)
 
     action_by_label = {
         "📊 Статистика сегодня": "today",
@@ -289,6 +930,8 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await mileage_week(update, context)
     elif text == "🧮 Заполнить формулы":
         await backfill_command(update, context)
+    elif text == "👥 Водители":
+        await show_driver_menu(update, context)
 
 
 async def on_city_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -352,6 +995,8 @@ async def handle_private_text(update: Update, context: ContextTypes.DEFAULT_TYPE
     """Обработчик произвольного текста в личных сообщениях."""
     if not check_access(update):
         await access_denied(update)
+        return
+    if await continue_driver_text_flow(update, context):
         return
     await update.message.reply_text(
         "Используй кнопки ниже для работы со статистикой 👇",
@@ -559,12 +1204,14 @@ def main():
     # Регистрируем обработчик /start
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("backfill", backfill_command))
+    # Специализированный drv-обработчик должен стоять перед общим city/page.
+    app.add_handler(CallbackQueryHandler(on_driver_callback, pattern=r"^drv\|"))
     app.add_handler(CallbackQueryHandler(on_city_callback))
 
     # Обработчик кнопок в личных сообщениях
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE &
-        filters.Regex(r"^(📊 Статистика сегодня|📈 За неделю|🚗 Активные маршруты|❓ Помощь|📏 Километраж за неделю|🧮 Заполнить формулы)$"),
+        filters.Regex(r"^(📊 Статистика сегодня|📈 За неделю|🚗 Активные маршруты|❓ Помощь|📏 Километраж за неделю|🧮 Заполнить формулы|👥 Водители)$"),
         handle_buttons
     ))
 
