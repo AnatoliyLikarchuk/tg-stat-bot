@@ -299,7 +299,22 @@ def test_archive_creates_archive_headers_atomically_before_moving_row():
         if "updateCells" in request
         and "stringValue" in request["updateCells"]["rows"][0]["values"][0]["userEnteredValue"]
     ]
-    assert header_values == ["Уволенные", "Киев"]
+    assert header_values == ["Звільнені", "Киев"]
+
+
+def test_roster_recognizes_ukrainian_archive_heading():
+    manager = make_manager(_grid(
+        ["Київ", ""],
+        ["1", "Іван", "10"],
+        ["Звільнені", ""],
+        ["Київ", ""],
+        ["2", "Петро", "11"],
+    ))
+
+    roster = manager.get_driver_roster()
+
+    assert roster["active"] == {"Київ": ["Іван"]}
+    assert roster["archived"] == {"Київ": ["Петро"]}
 
 
 def test_archive_adds_missing_city_subsection_to_existing_archive():

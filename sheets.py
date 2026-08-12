@@ -77,7 +77,8 @@ class SheetsManager:
     MILEAGE_SHEET_NAME = "Пробіг"
     MILEAGE_DRIVER_ROWS_RANGE = "A4:B300"  # заголовки городов + имена водителей
     MILEAGE_MANAGEMENT_GRID_RANGE = "A1:ZZ300"
-    MILEAGE_ARCHIVE_LABEL = "Уволенные"
+    MILEAGE_ARCHIVE_LABEL = "Звільнені"
+    MILEAGE_ARCHIVE_LABELS = frozenset({"Звільнені", "Уволенные"})
     DRIVER_ALIASES_SHEET_NAME = "Аліаси водіїв"
     DRIVER_ALIASES_RANGE = "A2:B1000"
     DRIVER_ALIASES_HEADERS = ["Аліас", "Канонічне прізвище"]
@@ -531,7 +532,8 @@ class SheetsManager:
         """Разбирает ``A4:B300`` на городские блоки и архив.
 
         Строка с непустой A и пустой B — заголовок города. Первый заголовок
-        ``Уволенные`` переключает разбор в архивный раздел; все последующие
+        ``Звільнені`` переключает разбор в архивный раздел; старое название
+        ``Уволенные`` временно также поддерживается. Все последующие
         заголовки городов относятся уже к архиву.
         """
         layout = _DriverLayout()
@@ -550,8 +552,12 @@ class SheetsManager:
             if not col_b:
                 if not col_a:
                     continue
-                if (not archived
-                        and col_a.casefold() == cls.MILEAGE_ARCHIVE_LABEL.casefold()):
+                if (
+                    not archived
+                    and col_a.casefold() in {
+                        label.casefold() for label in cls.MILEAGE_ARCHIVE_LABELS
+                    }
+                ):
                     archived = True
                     current_city = ""
                     layout.archive_row = row_number
