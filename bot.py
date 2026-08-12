@@ -28,15 +28,23 @@ from telegram.ext import (
 # Клавиатура с командами
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
-        [KeyboardButton("📊 Статистика сегодня"), KeyboardButton("📈 За неделю")],
-        [KeyboardButton("🚗 Активные маршруты"), KeyboardButton("❓ Помощь")],
-        [KeyboardButton("📏 Километраж за неделю"), KeyboardButton("🧮 Заполнить формулы")],
-        [KeyboardButton("👥 Водители")],
+        [KeyboardButton("📊 Статистика сьогодні"), KeyboardButton("📈 За тиждень")],
+        [KeyboardButton("🚗 Активні маршрути"), KeyboardButton("❓ Допомога")],
+        [KeyboardButton("📏 Кілометраж за тиждень"), KeyboardButton("🧮 Заповнити формули")],
+        [KeyboardButton("👥 Водії")],
     ],
     resize_keyboard=True
 )
 
 BUTTON_LABELS = {
+    "📊 Статистика сьогодні",
+    "📈 За тиждень",
+    "🚗 Активні маршрути",
+    "❓ Допомога",
+    "📏 Кілометраж за тиждень",
+    "🧮 Заповнити формули",
+    "👥 Водії",
+    # Старые reply-кнопки остаются валидными после обновления Telegram-клавиатуры.
     "📊 Статистика сегодня",
     "📈 За неделю",
     "🚗 Активные маршруты",
@@ -65,9 +73,9 @@ CITY_PAGE_SIZE = 8
 
 # Какому действию какая функция-рендер соответствует
 ACTION_LABELS = {
-    "today": "📊 Статистика сегодня",
-    "week": "📈 За неделю",
-    "active": "🚗 Активные маршруты",
+    "today": "📊 Статистика сьогодні",
+    "week": "📈 За тиждень",
+    "active": "🚗 Активні маршрути",
 }
 
 
@@ -115,27 +123,31 @@ parser = MessageParser()
 DRIVER_FLOW_KEY = "driver_management_flow"
 DRIVER_UNDO_KEY = "driver_management_undo"
 DRIVER_UNDO_LIMIT = 5
-DRIVER_NAME_RE = re.compile(r"^[А-ЯІЇЄҐЁ][а-яіїєґё']+$", re.IGNORECASE)
+DRIVER_CANONICAL_NAME_RE = re.compile(
+    r"^[А-ЩЬЮЯІЇЄҐ][а-щьюяіїєґ']+$", re.IGNORECASE
+)
+DRIVER_ALIAS_RE = re.compile(r"^[А-ЯІЇЄҐЁ][а-яіїєґё']+$", re.IGNORECASE)
 
 
 def build_driver_menu_keyboard() -> InlineKeyboardMarkup:
     """Главное inline-меню управления водителями."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Добавить", callback_data="drv|add")],
-        [InlineKeyboardButton("📦 В уволенные", callback_data="drv|archive")],
-        [InlineKeyboardButton("♻️ Вернуть в действующие", callback_data="drv|restore")],
+        [InlineKeyboardButton("➕ Додати", callback_data="drv|add")],
+        [InlineKeyboardButton("📦 До звільнених", callback_data="drv|archive")],
+        [InlineKeyboardButton("♻️ Повернути до чинних", callback_data="drv|restore")],
+        [InlineKeyboardButton("🔤 Аліаси", callback_data="drv|aliases")],
     ])
 
 
 def _driver_cancel_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("❌ Отмена", callback_data="drv|cancel")
+        InlineKeyboardButton("❌ Скасувати", callback_data="drv|cancel")
     ]])
 
 
 def _driver_menu_return_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[
-        InlineKeyboardButton("👥 К водителям", callback_data="drv|menu")
+        InlineKeyboardButton("👥 До водіїв", callback_data="drv|menu")
     ]])
 
 
@@ -149,7 +161,7 @@ def _driver_choice_keyboard(
         )]
         for idx, label in enumerate(labels)
     ]
-    rows.append([InlineKeyboardButton("❌ Отмена", callback_data="drv|cancel")])
+    rows.append([InlineKeyboardButton("❌ Скасувати", callback_data="drv|cancel")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -186,27 +198,43 @@ def _get_driver_roster() -> dict:
     }
 
 
+def _get_driver_aliases() -> dict:
+    data = sheets_manager.get_driver_aliases() or {}
+    aliases = data.get("aliases") if isinstance(data, dict) else {}
+    return {
+        "ok": bool(data.get("ok")) if isinstance(data, dict) else False,
+        "aliases": aliases if isinstance(aliases, dict) else {},
+    }
+
+
 def _format_fuel_rate(rate: float) -> str:
     return f"{rate:g}".replace(".", ",")
 
 
 def _driver_result_error(code: str) -> str:
     messages = {
-        "sheet_unavailable": "Таблица сейчас недоступна. Попробуй ещё раз позже.",
-        "invalid_city": "Город не прошёл проверку. Открой меню и выбери его заново.",
-        "invalid_driver": "Фамилия не прошла проверку.",
-        "invalid_fuel_rate": "Норма расхода должна быть больше 0 и не больше 100 л/100 км.",
-        "duplicate_driver": "Такой водитель уже есть в таблице — в действующих или уволенных.",
-        "city_not_found": "Город больше не найден. Обнови меню и повтори действие.",
-        "driver_not_found": "Водитель больше не найден. Возможно, список уже изменился.",
-        "already_archived": "Водитель уже находится в уволенных.",
-        "already_active": "Водитель уже вернут в действующие.",
+        "sheet_unavailable": "Таблиця зараз недоступна. Спробуй ще раз пізніше.",
+        "aliases_sheet_unavailable": "Довідник аліасів зараз недоступний.",
+        "invalid_city": "Місто не пройшло перевірку. Відкрий меню та вибери його знову.",
+        "invalid_driver": "Прізвище не пройшло перевірку.",
+        "invalid_alias": "Аліас має бути одним прізвищем кирилицею.",
+        "invalid_fuel_rate": "Норма витрати має бути більшою за 0 і не більшою за 100 л/100 км.",
+        "duplicate_driver": "Такий водій уже є в таблиці — серед чинних або звільнених.",
+        "city_not_found": "Місто більше не знайдено. Онови меню та повтори дію.",
+        "driver_not_found": "Водія більше не знайдено. Можливо, список уже змінився.",
+        "already_archived": "Водій уже перебуває серед звільнених.",
+        "already_active": "Водія вже повернуто до чинних.",
+        "alias_matches_driver": "Аліас збігається з канонічним прізвищем і не потрібен.",
+        "alias_is_driver": "Такий аліас збігається з прізвищем іншого водія.",
+        "alias_exists": "Цей аліас уже додано цьому водієві.",
+        "alias_conflict": "Цей аліас уже належить іншому водієві.",
+        "alias_not_found": "Аліас більше не знайдено.",
         "sheets_error": (
-            "Не удалось подтвердить операцию в Google Sheets. "
-            "Открой меню и проверь актуальный список."
+            "Не вдалося підтвердити операцію в Google Sheets. "
+            "Відкрий меню та перевір актуальний список."
         ),
     }
-    return messages.get(code, "Не удалось выполнить операцию. Попробуй ещё раз.")
+    return messages.get(code, "Не вдалося виконати операцію. Спробуй ще раз.")
 
 
 def _remember_driver_undo(context: ContextTypes.DEFAULT_TYPE, driver: str, city: str) -> str:
@@ -291,7 +319,7 @@ def check_access(update: Update) -> bool:
 
 async def access_denied(update: Update):
     """Отправляет сообщение об отказе в доступе."""
-    await update.message.reply_text("⛔ Доступ запрещён")
+    await update.message.reply_text("⛔ Доступ заборонено")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -300,8 +328,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await access_denied(update)
         return
     await update.message.reply_text(
-        "Привет! Я бот для сбора статистики логистики.\n\n"
-        "Используй кнопки ниже для работы со статистикой.",
+        "Привіт! Я бот для збору статистики логістики.\n\n"
+        "Використовуй кнопки нижче для роботи зі статистикою.",
         reply_markup=MAIN_KEYBOARD
     )
 
@@ -312,17 +340,17 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await access_denied(update)
         return
     await update.message.reply_text(
-        "📊 Бот статистики логистики\n\n"
-        "Отслеживаемые события:\n"
-        "• Начало сборки\n"
-        "• Сборка завершена\n"
-        "• Выезд маршрута\n"
-        "• Завершение маршрута\n"
-        "• Проблемы доставки\n\n"
-        "В личном меню «👥 Водители» можно добавить водителя, "
-        "переместить его в уволенные или вернуть обратно.\n\n"
-        "Добавь бота в группу логистики, и он будет автоматически "
-        "парсить сообщения и сохранять статистику."
+        "📊 Бот статистики логістики\n\n"
+        "Події, які відстежуються:\n"
+        "• Початок збору\n"
+        "• Збір завершено\n"
+        "• Виїзд маршруту\n"
+        "• Завершення маршруту\n"
+        "• Проблеми доставки\n\n"
+        "В особистому меню «👥 Водії» можна додати водія, перемістити "
+        "його до звільнених, повернути назад і керувати аліасами.\n\n"
+        "Додай бота до групи логістики, і він автоматично розбиратиме "
+        "повідомлення та зберігатиме статистику."
     )
 
 
@@ -339,17 +367,17 @@ async def backfill_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def format_stats(stats: dict, period: str) -> str:
     """Форматирует статистику для вывода."""
     text = f"📊 Статистика за {period}\n\n"
-    text += f"Всего событий: {stats['total_events']}\n\n"
+    text += f"Усього подій: {stats['total_events']}\n\n"
 
     if stats.get("by_type"):
-        text += "По типам:\n"
+        text += "За типами:\n"
         type_names = {
-            "начало_сборки": "🔧 Начало сборки",
-            "сборка_завершена": "✅ Сборка завершена",
-            "выезд": "🚗 Выезд",
-            "маршрут_завершён": "🏁 Маршрут завершён",
-            "все_выехали": "🎉 Все выехали",
-            "проблема": "⚠️ Проблемы"
+            "начало_сборки": "🔧 Початок збору",
+            "сборка_завершена": "✅ Збір завершено",
+            "выезд": "🚗 Виїзд",
+            "маршрут_завершён": "🏁 Маршрут завершено",
+            "все_выехали": "🎉 Усі виїхали",
+            "проблема": "⚠️ Проблеми"
         }
         for event_type, count in stats["by_type"].items():
             name = type_names.get(event_type, event_type.replace('_', ' '))
@@ -357,13 +385,13 @@ def format_stats(stats: dict, period: str) -> str:
         text += "\n"
 
     if stats.get("by_driver"):
-        text += "По водителям:\n"
+        text += "За водіями:\n"
         for driver, count in sorted(stats["by_driver"].items(), key=lambda x: -x[1]):
-            text += f"  • {driver}: {count} событий\n"
+            text += f"  • {driver}: {count} подій\n"
         text += "\n"
 
     if stats.get("problems"):
-        text += f"Проблемы ({len(stats['problems'])}):\n"
+        text += f"Проблеми ({len(stats['problems'])}):\n"
         for problem in stats["problems"][:5]:  # Максимум 5
             text += f"  — {problem[:50]}...\n"
 
@@ -378,7 +406,7 @@ async def mileage_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rows = sheets_manager.get_weekly_mileage()
 
     if not rows:
-        await update.message.reply_text("📏 За последние 7 дней пробег не записан.")
+        await update.message.reply_text("📏 За останні 7 днів пробіг не записано.")
         return
 
     today = datetime.now(pytz.timezone(config.TIMEZONE)).date()
@@ -388,7 +416,7 @@ async def mileage_week(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for r in rows:
         text += f"  • {r['driver']}: {r['km']} км\n"
         total += r["km"]
-    text += f"\nИтого: {total} км"
+    text += f"\nРазом: {total} км"
     await update.message.reply_text(text)
 
 
@@ -396,7 +424,7 @@ async def show_driver_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Открывает меню водителей и завершает незаконченный диалог."""
     _clear_driver_flow(context)
     await update.message.reply_text(
-        "👥 Управление водителями\n\nЧто нужно сделать?",
+        "👥 Керування водіями\n\nЩо потрібно зробити?",
         reply_markup=build_driver_menu_keyboard(),
     )
 
@@ -404,7 +432,7 @@ async def show_driver_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def _stale_driver_callback(query, context: ContextTypes.DEFAULT_TYPE):
     _clear_driver_flow(context)
     await query.edit_message_text(
-        "Это меню устарело. Открой новое и повтори действие.",
+        "Це меню застаріло. Відкрий нове та повтори дію.",
         reply_markup=_driver_menu_return_keyboard(),
     )
 
@@ -427,12 +455,12 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     """Inline-диалог добавления, архивации, возврата и undo."""
     query = update.callback_query
     if not config.is_user_allowed(query.from_user.id):
-        await query.answer("⛔ Доступ запрещён", show_alert=True)
+        await query.answer("⛔ Доступ заборонено", show_alert=True)
         return
 
     chat = update.effective_chat
     if chat is not None and getattr(chat, "type", "private") != "private":
-        await query.answer("Управление водителями доступно только в личке", show_alert=True)
+        await query.answer("Керування водіями доступне лише в особистих повідомленнях", show_alert=True)
         return
 
     await query.answer()
@@ -443,7 +471,7 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if action == "menu":
             _clear_driver_flow(context)
             await query.edit_message_text(
-                "👥 Управление водителями\n\nЧто нужно сделать?",
+                "👥 Керування водіями\n\nЩо потрібно зробити?",
                 reply_markup=build_driver_menu_keyboard(),
             )
             return
@@ -451,9 +479,173 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if action == "cancel":
             _clear_driver_flow(context)
             await query.edit_message_text(
-                "Действие отменено.",
+                "Дію скасовано.",
                 reply_markup=_driver_menu_return_keyboard(),
             )
+            return
+
+        if action == "aliases":
+            _clear_driver_flow(context)
+            await query.edit_message_text(
+                "🔤 Аліаси водіїв\n\n"
+                "Аліас — це точний варіант прізвища, який бот замінює на "
+                "канонічне українське прізвище.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("➕ Додати аліас", callback_data="drv|alias_add")],
+                    [InlineKeyboardButton("🗑 Видалити аліас", callback_data="drv|alias_remove")],
+                    [InlineKeyboardButton("👥 До водіїв", callback_data="drv|menu")],
+                ]),
+            )
+            return
+
+        if action == "alias_add":
+            roster = await asyncio.to_thread(_get_driver_roster)
+            if not roster["ok"]:
+                await query.edit_message_text(
+                    "Таблиця зараз недоступна. Спробуй ще раз пізніше.",
+                    reply_markup=_driver_menu_return_keyboard(),
+                )
+                return
+            drivers = sorted({
+                str(driver)
+                for section in (roster["active"], roster["archived"])
+                for names in section.values()
+                if isinstance(names, (list, tuple))
+                for driver in names
+                if str(driver).strip()
+            })
+            if not drivers:
+                await query.edit_message_text(
+                    "У таблиці немає водіїв.",
+                    reply_markup=_driver_menu_return_keyboard(),
+                )
+                return
+            token = _set_driver_flow(
+                context, action="alias_add", step="choose_driver", drivers=drivers
+            )
+            await query.edit_message_text(
+                "➕ Для якого водія додати аліас?",
+                reply_markup=_driver_choice_keyboard(drivers, "alias_add_driver", token),
+            )
+            return
+
+        if action == "alias_add_driver":
+            flow = _get_driver_flow(context)
+            if (len(parts) != 4
+                    or not _flow_matches(flow, "alias_add", "choose_driver", parts[2])):
+                await _stale_driver_callback(query, context)
+                return
+            try:
+                driver = flow["drivers"][int(parts[3])]
+            except (ValueError, IndexError, KeyError, TypeError):
+                await _stale_driver_callback(query, context)
+                return
+            _set_driver_flow(context, action="alias_add", step="alias", driver=driver)
+            await query.edit_message_text(
+                f"Канонічне прізвище: {driver}\n\n"
+                "Введи один точний варіант прізвища, наприклад російською.",
+                reply_markup=_driver_cancel_keyboard(),
+            )
+            return
+
+        if action == "alias_add_confirm":
+            flow = _get_driver_flow(context)
+            if (len(parts) != 3
+                    or not _flow_matches(flow, "alias_add", "confirm", parts[2])):
+                await _stale_driver_callback(query, context)
+                return
+            result = await asyncio.to_thread(
+                sheets_manager.add_driver_alias, flow["driver"], flow["alias"]
+            )
+            code = getattr(result, "code", "")
+            _clear_driver_flow(context)
+            if getattr(result, "ok", False) and code == "alias_added":
+                await query.edit_message_text(
+                    f"✅ Аліас «{result.alias}» додано для {result.driver}.",
+                    reply_markup=_driver_menu_return_keyboard(),
+                )
+            else:
+                await query.edit_message_text(
+                    f"⚠️ {_driver_result_error(code)}",
+                    reply_markup=_driver_menu_return_keyboard(),
+                )
+            return
+
+        if action == "alias_remove":
+            data = await asyncio.to_thread(_get_driver_aliases)
+            if not data["ok"]:
+                await query.edit_message_text(
+                    "Довідник аліасів зараз недоступний.",
+                    reply_markup=_driver_menu_return_keyboard(),
+                )
+                return
+            entries = sorted(
+                ({"alias": alias, "driver": driver}
+                 for alias, driver in data["aliases"].items()),
+                key=lambda item: (item["driver"].casefold(), item["alias"]),
+            )
+            if not entries:
+                await query.edit_message_text(
+                    "Список аліасів порожній.",
+                    reply_markup=_driver_menu_return_keyboard(),
+                )
+                return
+            labels = [f"{item['alias']} → {item['driver']}" for item in entries]
+            token = _set_driver_flow(
+                context, action="alias_remove", step="choose", entries=entries
+            )
+            await query.edit_message_text(
+                "🗑 Який аліас видалити?",
+                reply_markup=_driver_choice_keyboard(labels, "alias_remove_choose", token),
+            )
+            return
+
+        if action == "alias_remove_choose":
+            flow = _get_driver_flow(context)
+            if (len(parts) != 4
+                    or not _flow_matches(flow, "alias_remove", "choose", parts[2])):
+                await _stale_driver_callback(query, context)
+                return
+            try:
+                entry = flow["entries"][int(parts[3])]
+            except (ValueError, IndexError, KeyError, TypeError):
+                await _stale_driver_callback(query, context)
+                return
+            token = _set_driver_flow(
+                context, action="alias_remove", step="confirm", **entry
+            )
+            await query.edit_message_text(
+                f"Видалити аліас «{entry['alias']}» для {entry['driver']}?",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton(
+                        "✅ Видалити", callback_data=f"drv|alias_remove_confirm|{token}"
+                    )],
+                    [InlineKeyboardButton("❌ Скасувати", callback_data="drv|cancel")],
+                ]),
+            )
+            return
+
+        if action == "alias_remove_confirm":
+            flow = _get_driver_flow(context)
+            if (len(parts) != 3
+                    or not _flow_matches(flow, "alias_remove", "confirm", parts[2])):
+                await _stale_driver_callback(query, context)
+                return
+            result = await asyncio.to_thread(
+                sheets_manager.remove_driver_alias, flow["driver"], flow["alias"]
+            )
+            code = getattr(result, "code", "")
+            _clear_driver_flow(context)
+            if getattr(result, "ok", False) and code == "alias_removed":
+                await query.edit_message_text(
+                    f"✅ Аліас «{result.alias}» видалено.",
+                    reply_markup=_driver_menu_return_keyboard(),
+                )
+            else:
+                await query.edit_message_text(
+                    f"⚠️ {_driver_result_error(code)}",
+                    reply_markup=_driver_menu_return_keyboard(),
+                )
             return
 
         if action == "add":
@@ -461,7 +653,7 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if not roster["ok"]:
                 _clear_driver_flow(context)
                 await query.edit_message_text(
-                    "Таблица сейчас недоступна. Попробуй ещё раз позже.",
+                    "Таблиця зараз недоступна. Спробуй ще раз пізніше.",
                     reply_markup=_driver_menu_return_keyboard(),
                 )
                 return
@@ -469,7 +661,7 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if not cities:
                 _clear_driver_flow(context)
                 await query.edit_message_text(
-                    "В таблице не найдено ни одного активного города.",
+                    "У таблиці не знайдено жодного активного міста.",
                     reply_markup=_driver_menu_return_keyboard(),
                 )
                 return
@@ -477,7 +669,7 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 context, action="add", step="choose_city", cities=cities
             )
             await query.edit_message_text(
-                "➕ В какой город добавить водителя?",
+                "➕ До якого міста додати водія?",
                 reply_markup=_driver_choice_keyboard(cities, "add_city", token),
             )
             return
@@ -495,8 +687,8 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 return
             _set_driver_flow(context, action="add", step="driver", city=city)
             await query.edit_message_text(
-                f"➕ Город: {city}\n\n"
-                "Введи одну фамилию кириллицей, без пробелов и дефисов.",
+                f"➕ Місто: {city}\n\n"
+                "Введи канонічне прізвище українською, без пробілів і дефісів.",
                 reply_markup=_driver_cancel_keyboard(),
             )
             return
@@ -518,7 +710,7 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 rate = _format_fuel_rate(flow["fuel_rate"])
                 _clear_driver_flow(context)
                 await query.edit_message_text(
-                    f"✅ {driver} добавлен в {city}.\n"
+                    f"✅ {driver} додано до міста {city}.\n"
                     f"Норма: {rate} л/100 км.",
                     reply_markup=_driver_menu_return_keyboard(),
                 )
@@ -535,7 +727,7 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if not roster["ok"]:
                 _clear_driver_flow(context)
                 await query.edit_message_text(
-                    "Таблица сейчас недоступна. Попробуй ещё раз позже.",
+                    "Таблиця зараз недоступна. Спробуй ще раз пізніше.",
                     reply_markup=_driver_menu_return_keyboard(),
                 )
                 return
@@ -548,7 +740,7 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if not cities:
                 _clear_driver_flow(context)
                 await query.edit_message_text(
-                    "В таблице нет действующих водителей.",
+                    "У таблиці немає чинних водіїв.",
                     reply_markup=_driver_menu_return_keyboard(),
                 )
                 return
@@ -557,7 +749,7 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 cities=cities, drivers_by_city=drivers_by_city,
             )
             await query.edit_message_text(
-                "📦 Из какого города переместить водителя?",
+                "📦 З якого міста перемістити водія?",
                 reply_markup=_driver_choice_keyboard(
                     cities, "archive_city", token
                 ),
@@ -583,7 +775,7 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 city=city, drivers=drivers,
             )
             await query.edit_message_text(
-                f"📦 {city}: кого переместить в уволенные?",
+                f"📦 {city}: кого перемістити до звільнених?",
                 reply_markup=_driver_choice_keyboard(
                     drivers, "archive_driver", token
                 ),
@@ -608,14 +800,14 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 city=flow["city"], driver=driver,
             )
             await query.edit_message_text(
-                f"Переместить {driver} из {flow['city']} в «Уволенные»?\n\n"
-                "История и формулы сохранятся.",
+                f"Перемістити {driver} з {flow['city']} до «Звільнених»?\n\n"
+                "Історія та формули збережуться.",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton(
-                        "✅ Переместить",
+                        "✅ Перемістити",
                         callback_data=f"drv|archive_confirm|{token}",
                     )],
-                    [InlineKeyboardButton("❌ Отмена", callback_data="drv|cancel")],
+                    [InlineKeyboardButton("❌ Скасувати", callback_data="drv|cancel")],
                 ]),
             )
             return
@@ -637,11 +829,11 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 token = _remember_driver_undo(context, driver, city)
                 _clear_driver_flow(context)
                 await query.edit_message_text(
-                    f"✅ {driver} перемещён в «Уволенные».\n"
-                    f"Исходный город: {city}.",
+                    f"✅ {driver} переміщено до «Звільнених».\n"
+                    f"Початкове місто: {city}.",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("↩️ Отменить", callback_data=f"drv|undo|{token}")],
-                        [InlineKeyboardButton("👥 К водителям", callback_data="drv|menu")],
+                        [InlineKeyboardButton("↩️ Скасувати", callback_data=f"drv|undo|{token}")],
+                        [InlineKeyboardButton("👥 До водіїв", callback_data="drv|menu")],
                     ]),
                 )
                 return
@@ -657,7 +849,7 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if not roster["ok"]:
                 _clear_driver_flow(context)
                 await query.edit_message_text(
-                    "Таблица сейчас недоступна. Попробуй ещё раз позже.",
+                    "Таблиця зараз недоступна. Спробуй ще раз пізніше.",
                     reply_markup=_driver_menu_return_keyboard(),
                 )
                 return
@@ -672,7 +864,7 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             if not entries:
                 _clear_driver_flow(context)
                 await query.edit_message_text(
-                    "Список уволенных водителей пуст.",
+                    "Список звільнених водіїв порожній.",
                     reply_markup=_driver_menu_return_keyboard(),
                 )
                 return
@@ -683,7 +875,7 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 entries=entries, active_cities=active_cities,
             )
             await query.edit_message_text(
-                "♻️ Кого вернуть в действующие?",
+                "♻️ Кого повернути до чинних?",
                 reply_markup=_driver_choice_keyboard(
                     labels, "restore_driver", token
                 ),
@@ -711,11 +903,11 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 driver=entry["driver"], original_city=original_city, targets=targets,
             )
             labels = [
-                f"{city} (исходный)" if city == original_city else city
+                f"{city} (початкове)" if city == original_city else city
                 for city in targets
             ]
             await query.edit_message_text(
-                f"Куда вернуть {entry['driver']}?",
+                f"Куди повернути {entry['driver']}?",
                 reply_markup=_driver_choice_keyboard(
                     labels, "restore_city", token
                 ),
@@ -741,13 +933,13 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 target_city=target_city,
             )
             await query.edit_message_text(
-                f"Вернуть {flow['driver']} в действующие города {target_city}?",
+                f"Повернути {flow['driver']} до чинних у місті {target_city}?",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton(
-                        "✅ Вернуть",
+                        "✅ Повернути",
                         callback_data=f"drv|restore_confirm|{token}",
                     )],
-                    [InlineKeyboardButton("❌ Отмена", callback_data="drv|cancel")],
+                    [InlineKeyboardButton("❌ Скасувати", callback_data="drv|cancel")],
                 ]),
             )
             return
@@ -768,9 +960,9 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 city = getattr(result, "city", None) or flow["target_city"]
                 _clear_driver_flow(context)
                 text = (
-                    f"✅ {driver} вернут в действующие. Город: {city}."
+                    f"✅ {driver} повернуто до чинних. Місто: {city}."
                     if code == "restored"
-                    else f"ℹ️ {driver} уже в действующих. Город: {city}."
+                    else f"ℹ️ {driver} уже серед чинних. Місто: {city}."
                 )
                 await query.edit_message_text(
                     text,
@@ -790,7 +982,7 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             undo = undo_actions.get(token) if isinstance(undo_actions, dict) else None
             if not isinstance(undo, dict):
                 await query.edit_message_text(
-                    "Эта кнопка отмены устарела или уже недействительна.",
+                    "Ця кнопка скасування застаріла або вже недійсна.",
                     reply_markup=_driver_menu_return_keyboard(),
                 )
                 return
@@ -804,9 +996,9 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 city = getattr(result, "city", None) or undo["city"]
                 prefix = "↩️" if code == "restored" else "ℹ️"
                 text = (
-                    f"{prefix} Перемещение отменено: {driver} вернут в {city}."
+                    f"{prefix} Переміщення скасовано: {driver} повернуто до {city}."
                     if code == "restored"
-                    else f"{prefix} {driver} уже в действующих. Повторная отмена не требуется."
+                    else f"{prefix} {driver} уже серед чинних. Повторне скасування не потрібне."
                 )
                 await query.edit_message_text(text, reply_markup=_driver_menu_return_keyboard())
                 return
@@ -821,8 +1013,8 @@ async def on_driver_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         logger.exception("Ошибка в меню управления водителями: %s", exc)
         _clear_driver_flow(context)
         await query.edit_message_text(
-            "⚠️ Не удалось завершить действие в интерфейсе. "
-            "Открой меню и проверь актуальный список.",
+            "⚠️ Не вдалося завершити дію в інтерфейсі. "
+            "Відкрий меню та перевір актуальний список.",
             reply_markup=_driver_menu_return_keyboard(),
         )
 
@@ -837,21 +1029,22 @@ async def continue_driver_text_flow(
 
     if _flow_matches(flow, "add", "driver"):
         raw_driver = (update.message.text or "").strip()
-        if not DRIVER_NAME_RE.fullmatch(raw_driver):
+        if not DRIVER_CANONICAL_NAME_RE.fullmatch(raw_driver):
             await update.message.reply_text(
-                "⚠️ Нужна одна фамилия кириллицей, без пробелов и дефисов. Попробуй ещё раз.",
+                "⚠️ Потрібне одне канонічне прізвище українською, без "
+                "пробілів і дефісів. Спробуй ще раз.",
                 reply_markup=_driver_cancel_keyboard(),
             )
             return True
-        driver = parser.normalize_driver_name(raw_driver)
+        driver = raw_driver[0].upper() + raw_driver[1:].lower()
         _set_driver_flow(
             context, action="add", step="fuel_rate",
             city=flow["city"], driver=driver,
         )
         await update.message.reply_text(
-            f"Водитель: {driver}.\n\n"
-            "Введи норму расхода в л/100 км — число от 0 до 100. "
-            "Можно с запятой, например 12,5.",
+            f"Водій: {driver}.\n\n"
+            "Введи норму витрати в л/100 км — число від 0 до 100. "
+            "Можна з комою, наприклад 12,5.",
             reply_markup=_driver_cancel_keyboard(),
         )
         return True
@@ -867,7 +1060,7 @@ async def continue_driver_text_flow(
                 rate = None
         if rate is None or not 0 < rate <= 100:
             await update.message.reply_text(
-                "⚠️ Введи число больше 0 и не больше 100, например 12,5.",
+                "⚠️ Введи число більше за 0 і не більше за 100, наприклад 12,5.",
                 reply_markup=_driver_cancel_keyboard(),
             )
             return True
@@ -876,22 +1069,50 @@ async def continue_driver_text_flow(
             city=flow["city"], driver=flow["driver"], fuel_rate=rate,
         )
         await update.message.reply_text(
-            "Проверь данные:\n\n"
-            f"• Город: {flow['city']}\n"
-            f"• Водитель: {flow['driver']}\n"
+            "Перевір дані:\n\n"
+            f"• Місто: {flow['city']}\n"
+            f"• Водій: {flow['driver']}\n"
             f"• Норма: {_format_fuel_rate(rate)} л/100 км",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton(
-                    "✅ Добавить",
+                    "✅ Додати",
                     callback_data=f"drv|add_confirm|{token}",
                 )],
-                [InlineKeyboardButton("❌ Отмена", callback_data="drv|cancel")],
+                [InlineKeyboardButton("❌ Скасувати", callback_data="drv|cancel")],
+            ]),
+        )
+        return True
+
+    if _flow_matches(flow, "alias_add", "alias"):
+        raw_alias = (update.message.text or "").strip()
+        if not DRIVER_ALIAS_RE.fullmatch(raw_alias):
+            await update.message.reply_text(
+                "⚠️ Потрібен один точний варіант прізвища кирилицею, без "
+                "пробілів і дефісів.",
+                reply_markup=_driver_cancel_keyboard(),
+            )
+            return True
+        alias = raw_alias[0].upper() + raw_alias[1:].lower()
+        token = _set_driver_flow(
+            context, action="alias_add", step="confirm",
+            driver=flow["driver"], alias=alias,
+        )
+        await update.message.reply_text(
+            "Перевір відповідність:\n\n"
+            f"• Аліас: {alias}\n"
+            f"• Канонічне прізвище: {flow['driver']}",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton(
+                    "✅ Додати аліас",
+                    callback_data=f"drv|alias_add_confirm|{token}",
+                )],
+                [InlineKeyboardButton("❌ Скасувати", callback_data="drv|cancel")],
             ]),
         )
         return True
 
     await update.message.reply_text(
-        "Продолжи выбор с помощью inline-кнопок выше или отмени действие.",
+        "Продовж вибір за допомогою кнопок вище або скасуй дію.",
         reply_markup=_driver_cancel_keyboard(),
     )
     return True
@@ -906,10 +1127,13 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Любая другая reply-кнопка — явный выход из незаконченного
     # кадрового диалога, чтобы следующий текст не стал фамилией/расходом.
-    if text != "👥 Водители":
+    if text not in {"👥 Водії", "👥 Водители"}:
         _clear_driver_flow(context)
 
     action_by_label = {
+        "📊 Статистика сьогодні": "today",
+        "📈 За тиждень": "week",
+        "🚗 Активні маршрути": "active",
         "📊 Статистика сегодня": "today",
         "📈 За неделю": "week",
         "🚗 Активные маршруты": "active",
@@ -918,19 +1142,19 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         action = action_by_label[text]
         cities = sheets_manager.list_city_sheets()
         if not cities:
-            await update.message.reply_text("Пока нет ни одного города.")
+            await update.message.reply_text("Поки немає жодного міста.")
             return
         await update.message.reply_text(
-            f"{text} — выбери город:",
+            f"{ACTION_LABELS[action]} — вибери місто:",
             reply_markup=build_city_keyboard(action, page=0),
         )
-    elif text == "❓ Помощь":
+    elif text in {"❓ Допомога", "❓ Помощь"}:
         await help_command(update, context)
-    elif text == "📏 Километраж за неделю":
+    elif text in {"📏 Кілометраж за тиждень", "📏 Километраж за неделю"}:
         await mileage_week(update, context)
-    elif text == "🧮 Заполнить формулы":
+    elif text in {"🧮 Заповнити формули", "🧮 Заполнить формулы"}:
         await backfill_command(update, context)
-    elif text == "👥 Водители":
+    elif text in {"👥 Водії", "👥 Водители"}:
         await show_driver_menu(update, context)
 
 
@@ -959,7 +1183,7 @@ async def on_city_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cities = sorted(sheets_manager.list_city_sheets())
         if idx < 0 or idx >= len(cities):
             await query.edit_message_text(
-                "Список городов изменился — открой меню заново."
+                "Список міст змінився — відкрий меню знову."
             )
             return
         text = render_city_data(action, cities[idx])
@@ -971,24 +1195,24 @@ def render_city_data(action: str, city: str) -> str:
     if action == "today":
         stats = sheets_manager.get_today_stats(city)
         if not stats or stats.get("total_events", 0) == 0:
-            return f"📊 {city}: за сегодня событий пока нет."
-        return f"🏙 {city}\n" + format_stats(stats, "сегодня")
+            return f"📊 {city}: сьогодні подій поки немає."
+        return f"🏙 {city}\n" + format_stats(stats, "сьогодні")
     if action == "week":
         stats = sheets_manager.get_stats_for_period(city, 7)
         if not stats or stats.get("total_events", 0) == 0:
-            return f"📊 {city}: за последние 7 дней событий нет."
-        return f"🏙 {city}\n" + format_stats(stats, "неделю")
+            return f"📊 {city}: за останні 7 днів подій немає."
+        return f"🏙 {city}\n" + format_stats(stats, "тиждень")
     if action == "active":
         routes = sheets_manager.get_active_routes(city)
         if not routes:
-            return f"🚗 {city}: активных маршрутов нет."
-        text = f"🚗 {city} — активные маршруты:\n\n"
+            return f"🚗 {city}: активних маршрутів немає."
+        text = f"🚗 {city} — активні маршрути:\n\n"
         for r in routes:
             driver = f" ({r['driver']})" if r.get("driver") else ""
             status = (r.get("status") or "").replace("_", " ")
-            text += f"• Маршрут {r.get('route') or '?'}{driver} — {status} в {r.get('time') or ''}\n"
+            text += f"• Маршрут {r.get('route') or '?'}{driver} — {status} о {r.get('time') or ''}\n"
         return text
-    return "Неизвестное действие."
+    return "Невідома дія."
 
 
 async def handle_private_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -999,7 +1223,7 @@ async def handle_private_text(update: Update, context: ContextTypes.DEFAULT_TYPE
     if await continue_driver_text_flow(update, context):
         return
     await update.message.reply_text(
-        "Используй кнопки ниже для работы со статистикой 👇",
+        "Використовуй кнопки нижче для роботи зі статистикою 👇",
         reply_markup=MAIN_KEYBOARD
     )
 
@@ -1028,7 +1252,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     known_drivers = sheets_manager.get_mileage_drivers()
-    events = parser.parse(text, known_drivers)
+    alias_data = (
+        sheets_manager.get_driver_aliases()
+        if "км" in text.casefold()
+        else {"ok": True, "aliases": {}}
+    )
+    driver_aliases = (
+        alias_data.get("aliases", {})
+        if isinstance(alias_data, dict) and alias_data.get("ok")
+        else None
+    )
+    events = parser.parse(text, known_drivers, driver_aliases)
 
     # DEBUG: логируем результат парсинга
     if events:
@@ -1211,7 +1445,12 @@ def main():
     # Обработчик кнопок в личных сообщениях
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE &
-        filters.Regex(r"^(📊 Статистика сегодня|📈 За неделю|🚗 Активные маршруты|❓ Помощь|📏 Километраж за неделю|🧮 Заполнить формулы|👥 Водители)$"),
+        filters.Regex(
+            r"^(📊 Статистика сьогодні|📈 За тиждень|🚗 Активні маршрути|"
+            r"❓ Допомога|📏 Кілометраж за тиждень|🧮 Заповнити формули|👥 Водії|"
+            r"📊 Статистика сегодня|📈 За неделю|🚗 Активные маршруты|"
+            r"❓ Помощь|📏 Километраж за неделю|🧮 Заполнить формулы|👥 Водители)$"
+        ),
         handle_buttons
     ))
 

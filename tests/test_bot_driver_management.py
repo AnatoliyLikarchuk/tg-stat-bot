@@ -48,6 +48,9 @@ class FakeSheetsManager:
         self.add_calls = []
         self.archive_calls = []
         self.restore_calls = []
+        self.aliases = {"марченко": "Марченко"}
+        self.alias_add_calls = []
+        self.alias_remove_calls = []
         self.add_result = result(True, "added", "Марченко", "Киев")
         self.archive_result = result(True, "archived", "Марченко", "Киев")
         self.restore_results = [result(True, "restored", "Марченко", "Киев")]
@@ -67,6 +70,21 @@ class FakeSheetsManager:
     def restore_mileage_driver(self, driver, target_city):
         self.restore_calls.append((driver, target_city))
         return self.restore_results.pop(0)
+
+    def get_driver_aliases(self):
+        return {"ok": True, "aliases": self.aliases}
+
+    def add_driver_alias(self, driver, alias):
+        self.alias_add_calls.append((driver, alias))
+        return SimpleNamespace(
+            ok=True, code="alias_added", alias=alias, driver=driver
+        )
+
+    def remove_driver_alias(self, driver, alias):
+        self.alias_remove_calls.append((driver, alias))
+        return SimpleNamespace(
+            ok=True, code="alias_removed", alias=alias, driver=driver
+        )
 
 
 def result(ok, code, driver=None, city=None):
@@ -106,10 +124,12 @@ def test_driver_button_and_inline_menu_are_available(monkeypatch):
     asyncio.run(bot.handle_buttons(FakeUpdate(message=message), context))
 
     assert "👥 Водители" in bot.BUTTON_LABELS
-    assert bot.MAIN_KEYBOARD.keyboard[-1][0].text == "👥 Водители"
+    assert bot.MAIN_KEYBOARD.keyboard[-1][0].text == "👥 Водії"
     text, markup = message.replies[-1]
-    assert "Управление водителями" in text
-    assert callback_values(markup) == ["drv|add", "drv|archive", "drv|restore"]
+    assert "Керування водіями" in text
+    assert callback_values(markup) == [
+        "drv|add", "drv|archive", "drv|restore", "drv|aliases"
+    ]
 
 
 def test_roster_read_failure_is_not_reported_as_an_empty_table(monkeypatch):
@@ -119,7 +139,7 @@ def test_roster_read_failure_is_not_reported_as_an_empty_table(monkeypatch):
 
     query = run_callback("drv|add", context)
 
-    assert "Таблица сейчас недоступна" in query.edits[-1][0]
+    assert "Таблиця зараз недоступна" in query.edits[-1][0]
     assert manager.add_calls == []
 
 
@@ -134,18 +154,18 @@ def test_add_driver_flow_validates_text_and_accepts_comma_rate(monkeypatch):
     add_menu = run_callback("drv|add", context)
     add_city_callback = callback_values(add_menu.edits[-1][1])[0]
     query = run_callback(add_city_callback, context)
-    assert "Город: Киев" in query.edits[-1][0]
+    assert "Місто: Киев" in query.edits[-1][0]
 
     invalid_name = run_private_text("Марченко Иван", context)
-    assert "одна фамилия" in invalid_name.replies[-1][0]
+    assert "канонічне прізвище" in invalid_name.replies[-1][0]
     assert context.user_data[bot.DRIVER_FLOW_KEY]["step"] == "driver"
 
     surname = run_private_text("Марченко", context)
-    assert "Водитель: Марченко" in surname.replies[-1][0]
+    assert "Водій: Марченко" in surname.replies[-1][0]
     assert context.user_data[bot.DRIVER_FLOW_KEY]["step"] == "fuel_rate"
 
     invalid_rate = run_private_text("0", context)
-    assert "больше 0" in invalid_rate.replies[-1][0]
+    assert "більше за 0" in invalid_rate.replies[-1][0]
     assert context.user_data[bot.DRIVER_FLOW_KEY]["step"] == "fuel_rate"
 
     confirmation = run_private_text("12,5", context)
@@ -156,7 +176,7 @@ def test_add_driver_flow_validates_text_and_accepts_comma_rate(monkeypatch):
     completed = run_callback(add_confirm_callback, context)
 
     assert manager.add_calls == [("Киев", "Марченко", 12.5)]
-    assert "Марченко добавлен в Киев" in completed.edits[-1][0]
+    assert "Марченко додано до міста Киев" in completed.edits[-1][0]
     assert bot.DRIVER_FLOW_KEY not in context.user_data
 
 
@@ -176,7 +196,7 @@ def test_add_result_code_is_shown_and_flow_is_cleared(monkeypatch):
 
     query = run_callback("drv|add_confirm|addtoken", context)
 
-    assert "уже есть в таблице" in query.edits[-1][0]
+    assert "уже є в таблиці" in query.edits[-1][0]
     assert bot.DRIVER_FLOW_KEY not in context.user_data
 
 
@@ -213,8 +233,8 @@ def test_archive_offers_undo_and_repeated_undo_is_idempotent(monkeypatch):
         ("Марченко", "Киев"),
         ("Марченко", "Киев"),
     ]
-    assert "Перемещение отменено" in undone.edits[-1][0]
-    assert "уже в действующих" in repeated.edits[-1][0]
+    assert "Переміщення скасовано" in undone.edits[-1][0]
+    assert "уже серед чинних" in repeated.edits[-1][0]
 
 
 def test_lost_undo_token_is_safe_and_does_not_touch_sheets(monkeypatch):
@@ -224,7 +244,7 @@ def test_lost_undo_token_is_safe_and_does_not_touch_sheets(monkeypatch):
 
     query = run_callback("drv|undo|missing1", context)
 
-    assert "устарела" in query.edits[-1][0]
+    assert "застаріла" in query.edits[-1][0]
     assert manager.restore_calls == []
 
 
@@ -242,7 +262,7 @@ def test_old_confirmation_token_cannot_apply_a_newer_flow(monkeypatch):
 
     query = run_callback("drv|archive_confirm|oldtoken", context)
 
-    assert "меню устарело" in query.edits[-1][0]
+    assert "меню застаріло" in query.edits[-1][0]
     assert manager.archive_calls == []
 
 
@@ -265,7 +285,7 @@ def test_restore_can_target_another_active_city(monkeypatch):
     restored = run_callback(confirm_callback, context)
 
     assert manager.restore_calls == [("Марченко", "Одесса")]
-    assert "Марченко вернут в действующие. Город: Одесса" in restored.edits[-1][0]
+    assert "Марченко повернуто до чинних. Місто: Одесса" in restored.edits[-1][0]
     assert bot.DRIVER_FLOW_KEY not in context.user_data
 
 
@@ -279,7 +299,7 @@ def test_cancel_clears_active_flow(monkeypatch):
 
     query = run_callback("drv|cancel", context)
 
-    assert query.edits[-1][0] == "Действие отменено."
+    assert query.edits[-1][0] == "Дію скасовано."
     assert bot.DRIVER_FLOW_KEY not in context.user_data
 
 
@@ -290,8 +310,52 @@ def test_driver_callbacks_are_rejected_in_group(monkeypatch):
 
     query = run_callback("drv|add", context, chat_type="group")
 
-    assert query.answers == [("Управление водителями доступно только в личке", True)]
+    assert query.answers == [(
+        "Керування водіями доступне лише в особистих повідомленнях", True
+    )]
     assert manager.roster_calls == 0
+
+
+def test_canonical_driver_is_not_silently_transliterated(monkeypatch):
+    manager = FakeSheetsManager({"active": {"Київ": []}, "archived": {}})
+    allow_driver_ui(monkeypatch, manager)
+    context = FakeContext()
+    context.user_data[bot.DRIVER_FLOW_KEY] = {
+        "action": "add", "step": "driver", "city": "Київ"
+    }
+
+    invalid = run_private_text("Сыров", context)
+
+    assert "українською" in invalid.replies[-1][0]
+    assert context.user_data[bot.DRIVER_FLOW_KEY]["step"] == "driver"
+
+
+def test_alias_can_be_added_and_removed_from_driver_menu(monkeypatch):
+    manager = FakeSheetsManager({
+        "active": {"Київ": ["Сергеєв"]}, "archived": {}
+    })
+    allow_driver_ui(monkeypatch, manager)
+    context = FakeContext()
+
+    choose_driver = run_callback("drv|alias_add", context)
+    driver_callback = callback_values(choose_driver.edits[-1][1])[0]
+    prompt = run_callback(driver_callback, context)
+    assert "Канонічне прізвище: Сергеєв" in prompt.edits[-1][0]
+
+    confirmation = run_private_text("Сергеев", context)
+    confirm_callback = callback_values(confirmation.replies[-1][1])[0]
+    completed = run_callback(confirm_callback, context)
+    assert manager.alias_add_calls == [("Сергеєв", "Сергеев")]
+    assert "Аліас «Сергеев» додано" in completed.edits[-1][0]
+
+    manager.aliases = {"сергеев": "Сергеєв"}
+    choose_alias = run_callback("drv|alias_remove", context)
+    remove_callback = callback_values(choose_alias.edits[-1][1])[0]
+    confirmation = run_callback(remove_callback, context)
+    confirm_callback = callback_values(confirmation.edits[-1][1])[0]
+    removed = run_callback(confirm_callback, context)
+    assert manager.alias_remove_calls == [("Сергеєв", "сергеев")]
+    assert "видалено" in removed.edits[-1][0]
 
 
 def test_driver_callback_handler_is_registered_before_general_handler():

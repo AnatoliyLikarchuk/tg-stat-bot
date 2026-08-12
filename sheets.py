@@ -35,6 +35,16 @@ class DriverChangeResult:
 
 
 @dataclass(frozen=True)
+class DriverAliasResult:
+    """Результат изменения управляемого алиаса водителя."""
+
+    ok: bool
+    code: str
+    alias: str = ""
+    driver: str = ""
+
+
+@dataclass(frozen=True)
 class _DriverLocation:
     """Фактическое положение строки водителя в листе."""
 
@@ -68,6 +78,9 @@ class SheetsManager:
     MILEAGE_DRIVER_ROWS_RANGE = "A4:B300"  # заголовки городов + имена водителей
     MILEAGE_MANAGEMENT_GRID_RANGE = "A1:ZZ300"
     MILEAGE_ARCHIVE_LABEL = "Уволенные"
+    DRIVER_ALIASES_SHEET_NAME = "Аліаси водіїв"
+    DRIVER_ALIASES_RANGE = "A2:B1000"
+    DRIVER_ALIASES_HEADERS = ["Аліас", "Канонічне прізвище"]
     _MILEAGE_DRIVERS_TTL = 3600  # TTL кэша списка водителей
 
     MONTH_NAMES_UA = {
@@ -80,12 +93,15 @@ class SheetsManager:
         self.spreadsheet = None
         self.mileage_sheet = None
         self.mileage_sheet_id = None
+        self.driver_aliases_sheet = None
         self._city_sheets = {}    # {city_name: worksheet}
         self._cache = {}          # {city_name: (records, timestamp)}
         self._CACHE_TTL = 5       # TTL кэша в секундах
         self._mileage_lock = Lock()
         self._driver_rows_cache = None  # {driver_name: row_index_1_based}
         self._driver_rows_ts = 0
+        self._driver_aliases_cache = None
+        self._driver_aliases_ts = 0
 
     def connect(self) -> bool:
         """Подключается к Google Sheets."""
@@ -122,6 +138,16 @@ class SheetsManager:
                 self.mileage_sheet = None
                 self.mileage_sheet_id = None
                 logger.warning(f"Лист '{self.MILEAGE_SHEET_NAME}' не найден — учёт километража отключён")
+
+            try:
+                self.driver_aliases_sheet = self.spreadsheet.worksheet(
+                    self.DRIVER_ALIASES_SHEET_NAME
+                )
+            except gspread.WorksheetNotFound:
+                self.driver_aliases_sheet = None
+                logger.info(
+                    "Лист '%s' пока не создан", self.DRIVER_ALIASES_SHEET_NAME
+                )
 
             logger.info(f"Подключено к таблице: {self.spreadsheet.url}")
             return True
@@ -800,6 +826,157 @@ class SheetsManager:
         недоступен — возвращает пустое множество.
         """
         return set(self._get_driver_rows().keys())
+
+    def _get_driver_aliases_sheet(self):
+        """Возвращает служебный лист, повторно обнаруживая его после миграции."""
+        if self.driver_aliases_sheet is not None:
+            return self.driver_aliases_sheet
+        if self.spreadsheet is None:
+            return None
+        try:
+            self.driver_aliases_sheet = self.spreadsheet.worksheet(
+                self.DRIVER_ALIASES_SHEET_NAME
+            )
+        except gspread.WorksheetNotFound:
+            return None
+        return self.driver_aliases_sheet
+
+    @staticmethod
+    def _clean_alias_value(value) -> str:
+        return " ".join(str(value or "").strip().split())
+
+    def get_driver_aliases(self) -> dict:
+        """Возвращает точные алиасы ``casefold(alias) -> каноническая фамилия``."""
+        now = time.time()
+        if (
+            self._driver_aliases_cache is not None
+            and (now - self._driver_aliases_ts) < self._MILEAGE_DRIVERS_TTL
+        ):
+            return {"ok": True, "aliases": dict(self._driver_aliases_cache)}
+        sheet = self._get_driver_aliases_sheet()
+        if sheet is None:
+            return {"ok": False, "aliases": {}}
+        try:
+            rows = self._with_retry(
+                "Чтение алиасов водителей",
+                lambda: sheet.get_values(self.DRIVER_ALIASES_RANGE),
+            )
+            aliases = {}
+            for row in rows:
+                alias = self._clean_alias_value(row[0] if row else "")
+                driver = self._clean_alias_value(row[1] if len(row) > 1 else "")
+                if alias and driver:
+                    aliases[alias.casefold()] = driver
+            self._driver_aliases_cache = aliases
+            self._driver_aliases_ts = now
+            return {"ok": True, "aliases": aliases}
+        except Exception as e:
+            logger.error("Ошибка чтения алиасов водителей: %s", e, exc_info=True)
+            return {"ok": False, "aliases": {}}
+
+    def ensure_driver_aliases_sheet(self, seed_aliases=None) -> int:
+        """Создаёт и оформляет служебный лист; возвращает число алиасов."""
+        if self.spreadsheet is None:
+            raise RuntimeError("Google Sheets не подключен")
+        with self._mileage_lock:
+            sheet = self._get_driver_aliases_sheet()
+            if sheet is None:
+                sheet = self.spreadsheet.add_worksheet(
+                    title=self.DRIVER_ALIASES_SHEET_NAME, rows=1000, cols=2
+                )
+                self.driver_aliases_sheet = sheet
+                sheet.update("A1:B1", [self.DRIVER_ALIASES_HEADERS])
+                sheet.freeze(rows=1)
+                sheet.format("A1:B1", {
+                    "backgroundColor": {"red": 0.9, "green": 0.9, "blue": 0.9},
+                    "textFormat": {"bold": True},
+                    "horizontalAlignment": "CENTER",
+                })
+                sheet.format("A:B", {"wrapStrategy": "WRAP"})
+
+            current = self.get_driver_aliases()
+            aliases = dict(current.get("aliases", {})) if current.get("ok") else {}
+            layout = self._read_driver_layout()
+            valid_drivers = {location.name.casefold() for location in layout.drivers}
+            additions = []
+            for alias, driver in (seed_aliases or {}).items():
+                clean_alias = self._clean_alias_value(alias)
+                clean_driver = self._clean_alias_value(driver)
+                key = clean_alias.casefold()
+                if (
+                    clean_alias
+                    and clean_driver
+                    and clean_driver.casefold() in valid_drivers
+                    and key != clean_driver.casefold()
+                    and key not in aliases
+                ):
+                    additions.append([clean_alias, clean_driver])
+                    aliases[key] = clean_driver
+            if additions:
+                sheet.append_rows(additions, value_input_option="RAW")
+            self._driver_aliases_cache = aliases
+            self._driver_aliases_ts = time.time()
+            return len(aliases)
+
+    def add_driver_alias(self, driver: str, alias: str) -> DriverAliasResult:
+        driver_name = self._clean_alias_value(driver)
+        alias_name = self._clean_alias_value(alias)
+        if not driver_name:
+            return DriverAliasResult(False, "invalid_driver", alias_name, driver_name)
+        if not alias_name or " " in alias_name:
+            return DriverAliasResult(False, "invalid_alias", alias_name, driver_name)
+        if alias_name.casefold() == driver_name.casefold():
+            return DriverAliasResult(False, "alias_matches_driver", alias_name, driver_name)
+        sheet = self._get_driver_aliases_sheet()
+        if sheet is None:
+            return DriverAliasResult(False, "aliases_sheet_unavailable", alias_name, driver_name)
+        with self._mileage_lock:
+            try:
+                layout = self._read_driver_layout()
+                canonical = self._find_driver(layout, driver_name)
+                if canonical is None:
+                    return DriverAliasResult(False, "driver_not_found", alias_name, driver_name)
+                if self._find_driver(layout, alias_name) is not None:
+                    return DriverAliasResult(False, "alias_is_driver", alias_name, canonical.name)
+                data = self.get_driver_aliases()
+                if not data.get("ok"):
+                    return DriverAliasResult(False, "sheets_error", alias_name, canonical.name)
+                existing = data["aliases"].get(alias_name.casefold())
+                if existing:
+                    code = "alias_exists" if existing.casefold() == canonical.name.casefold() else "alias_conflict"
+                    return DriverAliasResult(False, code, alias_name, existing)
+                sheet.append_row([alias_name, canonical.name], value_input_option="RAW")
+                self._driver_aliases_cache = None
+                self._driver_aliases_ts = 0
+                return DriverAliasResult(True, "alias_added", alias_name, canonical.name)
+            except Exception as e:
+                logger.error("Ошибка добавления алиаса: %s", e, exc_info=True)
+                return DriverAliasResult(False, "sheets_error", alias_name, driver_name)
+
+    def remove_driver_alias(self, driver: str, alias: str) -> DriverAliasResult:
+        driver_name = self._clean_alias_value(driver)
+        alias_name = self._clean_alias_value(alias)
+        sheet = self._get_driver_aliases_sheet()
+        if sheet is None:
+            return DriverAliasResult(False, "aliases_sheet_unavailable", alias_name, driver_name)
+        with self._mileage_lock:
+            try:
+                rows = sheet.get_values(self.DRIVER_ALIASES_RANGE)
+                for offset, row in enumerate(rows, start=2):
+                    current_alias = self._clean_alias_value(row[0] if row else "")
+                    current_driver = self._clean_alias_value(row[1] if len(row) > 1 else "")
+                    if (
+                        current_alias.casefold() == alias_name.casefold()
+                        and current_driver.casefold() == driver_name.casefold()
+                    ):
+                        sheet.delete_rows(offset)
+                        self._driver_aliases_cache = None
+                        self._driver_aliases_ts = 0
+                        return DriverAliasResult(True, "alias_removed", current_alias, current_driver)
+                return DriverAliasResult(False, "alias_not_found", alias_name, driver_name)
+            except Exception as e:
+                logger.error("Ошибка удаления алиаса: %s", e, exc_info=True)
+                return DriverAliasResult(False, "sheets_error", alias_name, driver_name)
 
     def add_mileage_driver(self, city: str, driver: str,
                            fuel_rate) -> DriverChangeResult:

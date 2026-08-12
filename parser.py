@@ -6,7 +6,7 @@
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional, List, Collection
+from typing import Optional, List, Collection, Mapping
 
 
 @dataclass
@@ -161,7 +161,9 @@ class MessageParser:
             for key, pattern in self.PATTERNS.items()
         }
 
-    def normalize_driver_name(self, name: str) -> str:
+    def normalize_driver_name(
+        self, name: str, managed_aliases: Optional[Mapping[str, str]] = None
+    ) -> str:
         """
         Нормализует имя водителя к единому формату (украинский).
         1. Проверяет словарь синонимов
@@ -170,11 +172,29 @@ class MessageParser:
         if not name:
             return name
 
-        name_lower = name.lower()
+        name_lower = name.casefold()
 
-        # 1. Проверяем словарь синонимов
-        if name_lower in self.DRIVER_ALIASES:
-            return self.DRIVER_ALIASES[name_lower]
+        # Управляемый справочник из Google Sheets имеет приоритет над
+        # историческими алиасами в коде. Ключи допускаются в любом регистре.
+        if managed_aliases is not None:
+            direct = managed_aliases.get(name_lower)
+            if direct is None:
+                direct = next(
+                    (
+                        canonical
+                        for alias, canonical in managed_aliases.items()
+                        if str(alias).casefold() == name_lower
+                    ),
+                    None,
+                )
+            if direct:
+                return str(direct)
+        else:
+            # До создания управляемого справочника сохраняем совместимость
+            # с историческим словарём в коде. После миграции таблица становится
+            # единственным источником алиасов, поэтому удаление реально работает.
+            if name_lower in self.DRIVER_ALIASES:
+                return self.DRIVER_ALIASES[name_lower]
 
         # 2. Если имя уже содержит уникальные украинские буквы — не трогаем
         if any(ch in name_lower for ch in "іїєґ"):
@@ -204,7 +224,12 @@ class MessageParser:
 
         return result
 
-    def parse(self, text: str, known_drivers: Collection[str] = frozenset()) -> List[ParsedEvent]:
+    def parse(
+        self,
+        text: str,
+        known_drivers: Collection[str] = frozenset(),
+        driver_aliases: Optional[Mapping[str, str]] = None,
+    ) -> List[ParsedEvent]:
         """
         Парсит сообщение и возвращает список событий.
         Одно сообщение может содержать несколько событий.
@@ -226,7 +251,12 @@ class MessageParser:
         mileage_match = self.compiled["mileage"].search(text)
         if mileage_match:
             raw_name, km_str = mileage_match.groups()
-            name = self.normalize_driver_name(raw_name)
+            known_by_casefold = {
+                str(driver).casefold(): str(driver) for driver in known_drivers
+            }
+            name = known_by_casefold.get(raw_name.casefold())
+            if name is None:
+                name = self.normalize_driver_name(raw_name, driver_aliases)
             if name in known_drivers:
                 events.append(ParsedEvent(
                     event_type=self.EVENT_MILEAGE,

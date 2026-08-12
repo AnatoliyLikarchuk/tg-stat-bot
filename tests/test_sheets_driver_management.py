@@ -1,6 +1,6 @@
 from threading import Lock
 
-from sheets import DriverChangeResult, SheetsManager
+from sheets import DriverAliasResult, DriverChangeResult, SheetsManager
 
 
 def _grid(*data_rows):
@@ -49,8 +49,27 @@ def make_manager(grid, *, error=None, on_batch=None):
     manager._mileage_lock = Lock()
     manager._driver_rows_cache = {"Старый кэш": 99}
     manager._driver_rows_ts = 1
+    manager._driver_aliases_cache = None
+    manager._driver_aliases_ts = 0
     manager._RETRY_DELAYS = ()
+    manager.driver_aliases_sheet = None
     return manager
+
+
+class FakeAliasSheet:
+    def __init__(self, rows=None):
+        self.rows = [list(row) for row in (rows or [])]
+
+    def get_values(self, range_name):
+        assert range_name == SheetsManager.DRIVER_ALIASES_RANGE
+        return [list(row) for row in self.rows]
+
+    def append_row(self, row, value_input_option=None):
+        assert value_input_option == "RAW"
+        self.rows.append(list(row))
+
+    def delete_rows(self, row):
+        self.rows.pop(row - 2)
 
 
 def _move_requests(manager):
@@ -448,3 +467,39 @@ def test_restore_reconciles_timeout_after_move_was_applied():
 
     assert result == DriverChangeResult(True, "restored", "Иван", "Киев")
     assert manager._driver_rows_cache is None
+
+
+def test_managed_alias_add_collision_and_remove():
+    manager = make_manager(_grid(
+        ["Київ", ""],
+        ["1", "Сергеєв", "10"],
+        ["2", "Косич", "11"],
+    ))
+    manager.driver_aliases_sheet = FakeAliasSheet([
+        ["Сергеев", "Сергеєв"],
+    ])
+
+    same = manager.add_driver_alias("Сергеєв", "сергеев")
+    conflict = manager.add_driver_alias("Косич", "Сергеев")
+    added = manager.add_driver_alias("Косич", "Косіч")
+    removed = manager.remove_driver_alias("Косич", "косіч")
+
+    assert same == DriverAliasResult(False, "alias_exists", "сергеев", "Сергеєв")
+    assert conflict == DriverAliasResult(False, "alias_conflict", "Сергеев", "Сергеєв")
+    assert added == DriverAliasResult(True, "alias_added", "Косіч", "Косич")
+    assert removed == DriverAliasResult(True, "alias_removed", "Косіч", "Косич")
+    assert manager.driver_aliases_sheet.rows == [["Сергеев", "Сергеєв"]]
+
+
+def test_alias_cannot_shadow_another_canonical_driver():
+    manager = make_manager(_grid(
+        ["Київ", ""],
+        ["1", "Сергеєв", "10"],
+        ["2", "Косич", "11"],
+    ))
+    manager.driver_aliases_sheet = FakeAliasSheet()
+
+    result = manager.add_driver_alias("Сергеєв", "Косич")
+
+    assert result == DriverAliasResult(False, "alias_is_driver", "Косич", "Сергеєв")
+    assert manager.driver_aliases_sheet.rows == []
